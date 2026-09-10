@@ -41,8 +41,8 @@ from . import register_module, job_log, job_state
 
 OTS_REPO = "https://github.com/brian7704/OpenTAKServer.git"
 OTS_INSTALL_DIR = os.path.expanduser("~/opentakserver")
-OTS_TAG = "v1.7.0"  # pinned release tag
-OTS_SHA = "master"  # pinned commit SHA — update when bumping TAG
+OTS_TAG = "v1.7.13"  # pinned release tag
+OTS_SHA = "67903c2"  # pinned commit SHA — update when bumping TAG
 
 # Docker container names
 OTS_CONTAINER = "opentakserver"
