@@ -20,7 +20,8 @@ Deploys and manages OpenTAKServer (https://github.com/brian7704/OpenTAKServer),
 an open source Python-based TAK Server as an alternative to the tak.gov TAK Server.
 
 Architecture:
-  - Docker Compose stack: OTS app, RabbitMQ, nginx
+  - Docker Compose stack: OTS app, RabbitMQ
+  - Caddy handles SSL termination and reverse proxy (ports 8443, 8446)
   - SQLite database (built-in, no PostgreSQL required)
   - config.yml for configuration
   - Built-in CA for certificate management
@@ -46,7 +47,6 @@ OTS_SHA = "master"  # pinned commit SHA — update when bumping TAG
 # Docker container names
 OTS_CONTAINER = "opentakserver"
 OTS_RABBIT_CONTAINER = "ots-rabbitmq"
-OTS_NGINX_CONTAINER = "ots-nginx"
 
 # ── Docker Compose ───────────────────────────────────────────────────────────
 
@@ -91,6 +91,9 @@ services:
       - OTS_LISTENER_PORT=8081
       - OTS_TCP_STREAMING_PORT=8088
       - OTS_SSL_STREAMING_PORT=8089
+      - OTS_MARTI_HTTP_PORT=8080
+      - OTS_MARTI_HTTPS_PORT=8443
+      - OTS_CERTIFICATE_ENROLLMENT_PORT=8446
       - OTS_RABBITMQ_SERVER_ADDRESS=rabbitmq
       - OTS_RABBITMQ_TTL=86400000
       - OTS_COT_PARSER_PROCESSES=1
@@ -134,89 +137,9 @@ services:
         max-size: "10m"
         max-file: "5"
 
-  nginx:
-    image: nginx:alpine
-    container_name: {nginx_container}
-    depends_on:
-      - opentakserver
-    ports:
-      - "0.0.0.0:8080:8080"
-      - "0.0.0.0:8443:8443"
-      - "0.0.0.0:8446:8446"
-    volumes:
-      - {ots_dir}/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - {ots_dir}/data/ca:/app/ca:ro
-    restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
 volumes:
   rabbitmq_data:
 '''
-
-# ── Nginx Config ─────────────────────────────────────────────────────────────
-
-OTS_NGINX_CONF = '''\
-server {{
-    listen 8080;
-    server_name _;
-
-    client_max_body_size 100M;
-
-    location / {{
-        proxy_pass http://{ots_container}:8081;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }}
-}}
-
-server {{
-    listen 8443 ssl;
-    server_name _;
-
-    ssl_certificate /app/ca/server.crt;
-    ssl_certificate_key /app/ca/server.key;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-
-    client_max_body_size 100M;
-
-    location / {{
-        proxy_pass http://{ots_container}:8081;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Ssl-Cert $ssl_client_escaped_cert;
-    }}
-}}
-
-server {{
-    listen 8446 ssl;
-    server_name _;
-
-    ssl_certificate /app/ca/server.crt;
-    ssl_certificate_key /app/ca/server.key;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-
-    client_max_body_size 100M;
-
-    location / {{
-        proxy_pass http://{ots_container}:8081;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }}
-}}
-'''
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -278,7 +201,7 @@ def get_version_info(ctx):
 # ── Lifecycle ────────────────────────────────────────────────────────────────
 
 def detect(ctx):
-    """Settings flag + docker inspect liveness."""
+    """Settings flag + docker inspect liveness + LDAP credential sync."""
     s = ctx['load_settings']()
     enabled = bool(s.get('ots_enabled', False))
     running = False
@@ -290,6 +213,11 @@ def detect(ctx):
             running = (r.stdout or '').strip() == 'true'
         except Exception:
             pass
+
+        # LDAP credential sync: re-read Authentik .env if LDAP is enabled
+        # This ensures the OTS container has current credentials after Authentik password changes
+        if running and s.get('ots_ldap_enabled'):
+            _sync_ldap_credentials(ctx, s)
     else:
         # Self-heal: container running but flag cleared
         try:
@@ -305,6 +233,48 @@ def detect(ctx):
         except Exception:
             pass
     return {'installed': bool(enabled), 'running': running}
+
+
+def _sync_ldap_credentials(ctx, settings):
+    """Re-read Authentik LDAP credentials and update docker-compose if changed.
+
+    This is a lightweight operation that runs on every page load when LDAP is enabled.
+    It ensures the OTS container has current credentials after Authentik password changes.
+    """
+    try:
+        # Read current LDAP password from Authentik
+        ak_token = (ctx['_get_authentik_env_value'](settings, 'AUTHENTIK_TOKEN') or
+                    ctx['_get_authentik_env_value'](settings, 'AUTHENTIK_BOOTSTRAP_TOKEN'))
+        if not ak_token:
+            return
+
+        ldap_pass = ctx['_get_authentik_env_value'](settings, 'AUTHENTIK_BOOTSTRAP_LDAPSERVICE_PASSWORD') or ''
+        stored_pass = settings.get('ots_ldap_bind_password', '')
+
+        # Only update if password changed
+        if ldap_pass and ldap_pass != stored_pass:
+            settings['ots_ldap_bind_password'] = ldap_pass
+            ctx['save_settings'](settings)
+
+            # Update docker-compose.yml with new password
+            dirpath = ots_dir(ctx)
+            compose_path = os.path.join(dirpath, 'docker-compose.yml')
+            if os.path.exists(compose_path):
+                try:
+                    content = ctx['_read_priv'](compose_path)
+                    import re as _re
+                    # Replace LDAP_BIND_USER_PASSWORD value
+                    content = _re.sub(
+                        r'(LDAP_BIND_USER_PASSWORD=).*',
+                        lambda m: m.group(1) + ldap_pass,
+                        content)
+                    ctx['_write_priv'](compose_path, content)
+                    # Restart container to pick up new password
+                    _compose(ctx, dirpath, 'restart', timeout=60)
+                except Exception:
+                    pass  # Non-fatal: container will use old password until next restart
+    except Exception:
+        pass  # Non-fatal: LDAP sync is best-effort
 
 
 def deploy(ctx, job, params):
@@ -408,7 +378,6 @@ def deploy(ctx, job, params):
             ots_dir=ots_dir_,
             ots_container=OTS_CONTAINER,
             rabbit_container=OTS_RABBIT_CONTAINER,
-            nginx_container=OTS_NGINX_CONTAINER,
             secret_key=secret_key,
             password_salt=password_salt,
             rabbit_password=rabbit_password,
@@ -430,11 +399,6 @@ def deploy(ctx, job, params):
         )
         ctx['_write_priv'](os.path.join(ots_dir_, 'docker-compose.yml'), compose_content)
         plog('✓ docker-compose.yml written')
-
-        # Write nginx.conf
-        nginx_content = OTS_NGINX_CONF.format(ots_container=OTS_CONTAINER)
-        ctx['_write_priv'](os.path.join(ots_dir_, 'nginx.conf'), nginx_content)
-        plog('✓ nginx.conf written')
 
         # Step 4: Build and start containers
         plog('')
@@ -550,22 +514,77 @@ def _run_update(ctx):
         _update_status['log'] = list(log)
     try:
         dirpath = ots_dir(ctx)
-        plog('━━━ Step 1/3: Pulling latest source ━━━')
+
+        # Step 0: Pre-upgrade snapshot
+        plog('━━━ Step 0/4: Pre-upgrade snapshot ━━━')
+        snapshot_dir = os.path.join(dirpath, 'snapshots')
+        os.makedirs(snapshot_dir, exist_ok=True)
+        import datetime as _dt
+        snapshot_name = f"pre-upgrade-{_dt.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        snapshot_path = os.path.join(snapshot_dir, snapshot_name)
+        os.makedirs(snapshot_path, exist_ok=True)
+
+        # Backup config files
+        for f in ['docker-compose.yml', 'data/config.yml']:
+            src = os.path.join(dirpath, f)
+            if os.path.exists(src):
+                dst = os.path.join(snapshot_path, os.path.basename(f))
+                subprocess.run(['cp', src, dst], capture_output=True, timeout=10)
+
+        # Backup data directory (excluding large files)
+        data_dir = os.path.join(dirpath, 'data')
+        if os.path.isdir(data_dir):
+            subprocess.run(['tar', '-czf', os.path.join(snapshot_path, 'data.tar.gz'),
+                           '--exclude= recordings', '--exclude=logs',
+                           '-C', dirpath, 'data'], capture_output=True, timeout=60)
+
+        plog(f'✓ Snapshot saved: {snapshot_name}')
+
+        # Step 1: Pull latest source
+        plog('')
+        plog('━━━ Step 1/4: Pulling latest source ━━━')
         ctx['_module_git'](dirpath, 'checkout', '--', '.', timeout=60)
         r = ctx['_module_git'](dirpath, 'pull', '--ff-only', timeout=120)
         plog((r.stdout + r.stderr).strip() or '(no output)')
         if r.returncode != 0:
             raise RuntimeError(f'git pull failed: {r.stderr[:300]}')
 
+        # Step 2: Rebuild containers
         plog('')
-        plog('━━━ Step 2/3: Rebuilding containers ━━━')
+        plog('━━━ Step 2/4: Rebuilding containers ━━━')
         r = _compose(ctx, dirpath, 'up -d --build', timeout=600)
         plog((r.stdout + r.stderr).strip()[-600:] or '(no output)')
         if r.returncode != 0:
             raise RuntimeError(f'docker compose build failed: {r.stderr[:300]}')
 
+        # Step 3: Sync LDAP credentials if Authentik is configured
         plog('')
-        plog('━━━ Step 3/3: Saving version ━━━')
+        plog('━━━ Step 3/4: Syncing LDAP credentials ━━━')
+        s = ctx['load_settings']()
+        fqdn = (s.get('fqdn') or '').strip()
+        if fqdn and s.get('ots_ldap_enabled'):
+            try:
+                ak_token = (ctx['_get_authentik_env_value'](s, 'AUTHENTIK_TOKEN') or
+                            ctx['_get_authentik_env_value'](s, 'AUTHENTIK_BOOTSTRAP_TOKEN'))
+                if ak_token:
+                    ldap_pass = ctx['_get_authentik_env_value'](s, 'AUTHENTIK_BOOTSTRAP_LDAPSERVICE_PASSWORD') or ''
+                    if ldap_pass:
+                        # Update LDAP password in settings
+                        s['ots_ldap_bind_password'] = ldap_pass
+                        ctx['save_settings'](s)
+                        plog('✓ LDAP credentials synced from Authentik')
+                    else:
+                        plog('  ⚠ No LDAP password found in Authentik')
+                else:
+                    plog('  ⚠ Authentik not configured — skipping LDAP sync')
+            except Exception as e:
+                plog(f'  ⚠ LDAP sync failed (non-fatal): {e}')
+        else:
+            plog('  LDAP not enabled — skipping')
+
+        # Step 4: Save version
+        plog('')
+        plog('━━━ Step 4/4: Saving version ━━━')
         version_r = ctx['_module_git'](dirpath, 'describe', '--tags', '--always', timeout=8)
         new_version = version_r.stdout.strip()
         s = ctx['load_settings']()
