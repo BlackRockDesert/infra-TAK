@@ -16175,6 +16175,17 @@ _F2B_OWNED_FILTERS = {
         "            \\[conn <HOST>:\\d+\\] \\[session [^\\]]+\\] closed: .*authentication failed\n"
         "ignoreregex =\n"
     ),
+    'ots-enrollment': (
+        "[Definition]\n"
+        "# Match OpenTAKServer failed enrollment/login attempts.\n"
+        "# OTS logs authentication failures on port 8446 (certificate enrollment).\n"
+        "# Log format varies but typically includes 'failed' or 'invalid' with client IP.\n"
+        "failregex = .*failed.*login.*from <HOST>\n"
+        "            .*invalid.*credentials.*<HOST>\n"
+        "            .*authentication.*failed.*<HOST>\n"
+        "            .*401.*<HOST>\n"
+        "ignoreregex =\n"
+    ),
 }
 
 
@@ -73512,6 +73523,53 @@ def _fail2ban_takserver_filter(plog):
     return True
 
 
+def _fail2ban_ots_filter(plog):
+    """Write fail2ban filter for OpenTAKServer enrollment port (v10.1.62 — idempotent).
+
+    Writes /etc/fail2ban/filter.d/ots-enrollment.conf for brute-force protection
+    on the OTS enrollment port (8446).
+
+    Does NOT enable the jail — the operator toggles that on the Fail2ban page.
+    Prerequisites: fail2ban installed AND OTS container exists.
+    Idempotent: skips if settings.fail2ban_setup.ots_filter == 'applied'.
+    """
+    import datetime as _dt4
+    if not os.path.exists('/etc/fail2ban'):
+        plog("fail2ban ots filter: SKIPPED — fail2ban not installed")
+        return False
+    # Check if OTS is installed (container exists)
+    r = subprocess.run(['docker', 'inspect', 'opentakserver'], capture_output=True, timeout=5)
+    if r.returncode != 0:
+        plog("fail2ban ots filter: SKIPPED — OTS container not found")
+        return False
+
+    s = load_settings()
+    if s.get('fail2ban_setup', {}).get('ots_filter') == 'applied':
+        plog("fail2ban ots filter: idempotent-noop (already applied)")
+        return False
+
+    plog("fail2ban ots filter: writing filter file")
+
+    # Write filter
+    filter_path = '/etc/fail2ban/filter.d/ots-enrollment.conf'
+    _makedirs_priv('/etc/fail2ban/filter.d', exist_ok=True)
+    filter_conf = _F2B_OWNED_FILTERS['ots-enrollment']
+    _write_priv(filter_path, filter_conf)
+    plog(f"fail2ban ots filter: wrote {filter_path}")
+
+    # Reload so the new filter is recognized
+    subprocess.run(_sudo_wrap(['fail2ban-client', 'reload']), capture_output=True, timeout=15)
+    plog("fail2ban ots filter: fail2ban reloaded — filter ready, jail disabled by default")
+
+    # Record outcome
+    s2 = load_settings()
+    s2.setdefault('fail2ban_setup', {})['ots_filter'] = 'applied'
+    s2['fail2ban_setup']['ots_filter_applied_at'] = _dt4.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+    save_settings(s2)
+    plog("fail2ban ots filter: complete")
+    return True
+
+
 # === Startup migrations: fix known bad settings and regenerate Caddy if needed ===
 # v0.9.44: canonical guard script for the daily console-restart timer. Written
 # to /usr/local/sbin by _ensure_console_restart_timer(); also committed at
@@ -75411,6 +75469,12 @@ def _startup_migrations():
             _fail2ban_takserver_filter(lambda m: print(f"Startup migration: {m}", flush=True))
         except Exception as _f2b_tak_err:
             print(f"Startup migration: fail2ban takserver filter error (non-fatal): {_f2b_tak_err}")
+
+        # v10.1.62: fail2ban filter for OpenTAKServer enrollment port
+        try:
+            _fail2ban_ots_filter(lambda m: print(f"Startup migration: {m}", flush=True))
+        except Exception as _f2b_ots_err:
+            print(f"Startup migration: fail2ban ots filter error (non-fatal): {_f2b_ots_err}")
 
         # v0.9.2: Create Authentik ReputationPolicy and bind to ldap-authentication-flow.
         # Idempotent — only runs the API calls on first startup per box.
