@@ -3056,6 +3056,23 @@ def detect_modules():
             'icon_url': '/static/logos/tak-video-restreamer-logo.png',
             'route': '/tak-video-restreamer', 'priority': 13, 'conflicts': ['mediamtx']}
 
+    # OpenTAKServer — registry-resident (modules/opentakserver.py).
+    _ots_desc = mod_registry.MODULES.get('ots')
+    try:
+        _ots_state = _ots_desc['detect'](mod_registry.get_ctx()) if _ots_desc else {}
+    except Exception:
+        _ots_state = {}
+    if _ots_desc:
+        modules['ots'] = {'name': _ots_desc['name'],
+            'installed': bool(_ots_state.get('installed')), 'running': bool(_ots_state.get('running')),
+            'description': _ots_desc['description'], 'icon': _ots_desc['icon'],
+            'route': _ots_desc['route'],
+            'priority': _ots_desc['priority'], 'conflicts': list(_ots_desc.get('conflicts') or [])}
+    else:
+        modules['ots'] = {'name': 'OpenTAKServer', 'installed': False, 'running': False,
+            'description': 'Python-based open source TAK Server', 'icon': '\U0001F310',
+            'route': '/opentakserver', 'priority': 4, 'conflicts': ['takserver']}
+
     # TAK Simulator — registry-resident (modules/simulator.py, v10.1.61). Dev-channel gate
     # (guide §10): the tile exists only on dev-channel boxes or where it is already installed.
     _sim_desc = mod_registry.MODULES.get('simulator')
@@ -3501,6 +3518,9 @@ def render_sidebar(modules, active_path, takwerx_logo_url=None):
     tvr = modules.get('tak_video_restreamer', {})
     if tvr.get('installed'):
         parts.append(link('/tak-video-restreamer', '<img src="/static/logos/tak-video-restreamer-logo.png" alt="TAK Video Restreamer" class="nav-icon" style="height:24px;width:auto;max-width:48px;object-fit:contain;display:block"><span>TAK Video Restreamer</span>', 'TAK Video Restreamer'))
+    ots = modules.get('ots', {})
+    if ots.get('installed'):
+        parts.append(link('/opentakserver', '<span class="nav-icon" style="font-size:22px;line-height:1;display:block">\U0001F310</span><span>OpenTAKServer</span>', 'OpenTAKServer'))
     simm = modules.get('simulator', {})
     if simm.get('installed'):
         parts.append(link('/simulator', '<span class="nav-icon" style="font-size:22px;line-height:1;display:block">\U0001F3AF</span><span>TAK Simulator</span>', 'TAK Simulator'))
@@ -14261,6 +14281,7 @@ def guarddog_page():
         {'id': 'takportal', 'name': 'TAK Portal', 'monitored': modules.get('takportal', {}).get('installed'), 'monitors': [{'name': 'Container', 'id': 'takportal_ctr', 'interval': '1 min', 'desc': 'Checks TAK Portal container is running. Alert and auto-restart after 3 failures. 15 min boot skip + cooldown to avoid restart loops.'}]},
         {'id': 'mediamtx', 'name': 'MediaMTX', 'monitored': modules.get('mediamtx', {}).get('installed'), 'monitors': [{'name': 'Service', 'id': 'mediamtx_svc', 'interval': '1 min', 'desc': 'Checks systemd mediamtx. Alert and restart after 3 failures. 15 min boot skip + cooldown to avoid restart loops.'}]},
         {'id': 'tak_video_restreamer', 'name': 'TAK Video Restreamer', 'monitored': modules.get('tak_video_restreamer', {}).get('installed'), 'monitors': [{'name': 'Container / HTTP', 'id': 'tvr_http', 'interval': '1 min', 'desc': 'Checks tak-video-restreamer container health (GET /login on port 3100). Alert and restart after 3 failures. 15 min boot skip + cooldown to avoid restart loops.'}]},
+        {'id': 'ots', 'name': 'OpenTAKServer', 'monitored': modules.get('ots', {}).get('installed'), 'monitors': [{'name': 'Container', 'id': 'ots_ctr', 'interval': '1 min', 'desc': 'Checks opentakserver container is running. Alert and restart after 3 failures. 15 min boot skip + cooldown to avoid restart loops.'}]},
         {'id': 'simulator', 'name': 'TAK Simulator', 'monitored': modules.get('simulator', {}).get('installed'), 'monitors': [{'name': 'Container', 'id': 'simulator_ctr', 'interval': '1 min', 'desc': 'Checks the tak-simulator container is running (liveness only). A scenario that is not running is normal and never alerts.'}]},
         {'id': 'nodered', 'name': 'Node-RED', 'monitored': modules.get('nodered', {}).get('installed'), 'monitors': [{'name': 'Container / HTTP', 'id': 'nodered_http', 'interval': '1 min', 'desc': 'Checks Node-RED HTTP (1880). Alert and restart after 3 failures. 15 min boot skip + cooldown to avoid restart loops.'}]},
         {'id': 'cloudtak', 'name': 'CloudTAK', 'monitored': modules.get('cloudtak', {}).get('installed'), 'monitors': [{'name': 'Container', 'id': 'cloudtak_ctr', 'interval': '1 min', 'desc': 'Checks CloudTAK container. Alert and restart after 3 failures. 15 min boot skip + cooldown to avoid restart loops.'}]},
@@ -19040,6 +19061,7 @@ def _guarddog_service_monitor_ids(settings):
         'takportal': ['takportal_ctr'],
         'mediamtx': ['mediamtx_svc'],
         'tak_video_restreamer': ['tvr_http'],
+        'ots': ['ots_ctr'],
         'simulator': ['simulator_ctr'],
         'nodered': ['nodered_http'],
         'cloudtak': ['cloudtak_ctr'],
@@ -19070,6 +19092,8 @@ def _guarddog_monitored_service_ids(settings):
         ids.append('mediamtx')
     if modules.get('tak_video_restreamer', {}).get('installed'):
         ids.append('tak_video_restreamer')
+    if modules.get('ots', {}).get('installed'):
+        ids.append('ots')
     if modules.get('simulator', {}).get('installed'):
         ids.append('simulator')
     if modules.get('nodered', {}).get('installed'):
@@ -19708,6 +19732,11 @@ def _monitor_health_check(monitor_id):
                     return resp.status == 200
             except Exception:
                 return False
+        if monitor_id == 'ots_ctr':
+            # OpenTAKServer container liveness check
+            r = subprocess.run(_sudo_wrap(['docker', 'inspect', '--format', '{{.State.Running}}', 'opentakserver']),
+                               capture_output=True, text=True, timeout=5)
+            return (r.stdout or '').strip() == 'true'
         if monitor_id == 'simulator_ctr':
             # v10.1.61: container liveness only — a stopped scenario is normal (PLAN §4.5)
             r = subprocess.run(_sudo_wrap(['docker', 'inspect', '--format', '{{.State.Running}}', 'tak-simulator']),
@@ -24883,6 +24912,7 @@ SERVICE_DOMAIN_DEFAULTS = {
     'webodm': 'webodm',
     'netbird': 'netbird',
     'remote_assist': 'remote',
+    'ots': 'ots',
 }
 
 def _get_service_domain(settings, service_key):
@@ -28383,6 +28413,21 @@ def generate_caddyfile(settings=None):
         lines.append(f"}}")
         lines.append("")
         _emit_alias_redirect(_get_service_alias(settings, 'tak_video_restreamer'), tvr_host)
+
+    ots_mod = modules.get('ots', {})
+    if ots_mod.get('installed'):
+        ots_host = sd.get('ots') or _get_service_domain(settings, 'ots')
+        lines.append(f"# OpenTAKServer — Python-based TAK Server")
+        lines.append(f"{ots_host} {{")
+        lines.append(f"    reverse_proxy 127.0.0.1:8443 {{")
+        lines.append(f"        transport http {{")
+        lines.append(f"            tls")
+        lines.append(f"            tls_insecure_skip_verify")
+        lines.append(f"        }}")
+        lines.append(f"    }}")
+        lines.append(f"}}")
+        lines.append("")
+        _emit_alias_redirect(_get_service_alias(settings, 'ots'), ots_host)
 
     nb_mod = modules.get('netbird', {})
     if nb_mod.get('installed'):
@@ -39492,6 +39537,34 @@ def tvr_page():
         deploying=_tvr_job.get('running', False),
         deploy_log=_tvr_job.get('log', []),
         deploy_error=_tvr_job.get('error', False),
+        metrics=get_system_metrics(), version=VERSION))
+    r.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    return r
+
+
+@app.route('/opentakserver')
+@login_required
+def opentakserver_page():
+    from flask import make_response
+    settings = load_settings()
+    modules = detect_modules()
+    ots = modules.get('ots', {})
+    takserver_conflict = modules.get('takserver', {}).get('installed', False)
+    ots_host = _get_service_domain(settings, 'ots')
+    ots_url = f'https://{ots_host}' if ots_host else ''
+    fqdn = settings.get('fqdn', '')
+    server_ip = settings.get('server_ip', '')
+    ots_vinfo = mod_registry.ots.get_version_info(mod_registry.get_ctx()) if ots.get('installed') else {}
+    _ots_job = mod_registry.job_state('ots')
+    r = make_response(render_template('opentakserver.html',
+        settings=settings, modules=modules, ots=ots,
+        ots_host=ots_host, ots_url=ots_url,
+        takserver_conflict=takserver_conflict,
+        ots_vinfo=ots_vinfo,
+        fqdn=fqdn, server_ip=server_ip,
+        deploying=_ots_job.get('running', False),
+        deploy_log=_ots_job.get('log', []),
+        deploy_error=_ots_job.get('error', False),
         metrics=get_system_metrics(), version=VERSION))
     r.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
     return r
@@ -69851,6 +69924,14 @@ def run_full_uninstall():
         except Exception as e:
             plog(f"⚠ TAK Simulator removal error (non-fatal): {e}")
         plog("✓ TAK Simulator removed")
+
+        # 1d. OpenTAKServer — registry uninstall path (modules/opentakserver.py).
+        plog("━━━ OpenTAKServer ━━━")
+        try:
+            mod_registry.uninstall_module('ots', log_fn=plog)
+        except Exception as e:
+            plog(f"⚠ OpenTAKServer removal error (non-fatal): {e}")
+        plog("✓ OpenTAKServer removed")
 
         # 2. TAK Portal
         plog("━━━ TAK Portal ━━━")
