@@ -39564,7 +39564,7 @@ def opentakserver_page():
     ots_url = f'https://{ots_host}' if ots_host else ''
     fqdn = settings.get('fqdn', '')
     server_ip = settings.get('server_ip', '')
-    ots_vinfo = mod_registry.ots.get_version_info(mod_registry.get_ctx()) if ots.get('installed') else {}
+    ots_vinfo = mod_registry.opentakserver.get_version_info(mod_registry.get_ctx()) if ots.get('installed') else {}
     _ots_job = mod_registry.job_state('ots')
     r = make_response(render_template('opentakserver.html',
         settings=settings, modules=modules, ots=ots,
