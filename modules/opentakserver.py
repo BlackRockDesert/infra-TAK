@@ -277,6 +277,91 @@ def _sync_ldap_credentials(ctx, settings):
         pass  # Non-fatal: LDAP sync is best-effort
 
 
+def _get_ots_host(settings):
+    """Get OTS hostname for TAK Portal connection."""
+    fqdn = (settings.get('fqdn') or '').strip()
+    if fqdn:
+        return f'ots.{fqdn}'
+    return (settings.get('server_ip') or 'localhost').strip()
+
+
+def build_takportal_settings(ctx, settings):
+    """Build TAK Portal settings dict for OTS integration.
+
+    OTS differences from TAK Server:
+    - Uses username/password auth (not X.509 mTLS)
+    - Has built-in CA (not file-based)
+    - Runs in Docker (similar to TAK Server container mode)
+
+    Returns dict of settings to merge into TAK Portal's settings.json.
+    """
+    server_ip = (settings.get('server_ip') or '').strip() or 'localhost'
+    fqdn = (settings.get('fqdn') or '').strip()
+
+    # Authentik settings
+    ak_token = (ctx['_get_authentik_env_value'](settings, 'AUTHENTIK_BOOTSTRAP_TOKEN') or
+                ctx['_get_authentik_env_value'](settings, 'AUTHENTIK_TOKEN') or '')
+
+    # OTS API URL
+    ots_host = _get_ots_host(settings)
+    if fqdn:
+        api_url = f'https://{ots_host}'
+    elif server_ip and server_ip not in ('localhost', '127.0.0.1'):
+        api_url = f'https://{server_ip}:8443'
+    else:
+        api_url = 'https://host.docker.internal:8443'
+
+    # SSH settings (OTS runs in Docker, similar to TAK Server container mode)
+    ssh_host = 'host.docker.internal'
+    ssh_user = 'root'
+    try:
+        import pwd as _pwd
+        ssh_user = _pwd.getpwuid(os.getuid()).pw_name
+    except Exception:
+        pass
+
+    # Build settings dict
+    built = {
+        "AUTHENTIK_URL": "http://authentik-server-1:9000",  # Docker-internal
+        "AUTHENTIK_TOKEN": ak_token,
+        "USERS_HIDDEN_PREFIXES": "akadmin,webadmin,ak-,adm_,nodered-,ma-",
+        "GROUPS_HIDDEN_PREFIXES": "authentik, MA -, vid_, tak_ROLE_",
+        "USERS_ACTIONS_HIDDEN_PREFIXES": "akadmin,webadmin",
+        "GROUPS_ACTIONS_HIDDEN_PREFIXES": "",
+        "DASHBOARD_AUTHENTIK_STATS_REFRESH_SECONDS": "300",
+        "PORTAL_AUTH_ENABLED": "true" if fqdn else "false",
+        "PORTAL_AUTH_REQUIRED_GROUP": "authentik Admins" if fqdn else "",
+        "AUTHENTIK_PUBLIC_URL": f"https://tak.{fqdn}" if fqdn else "",
+        "TAK_PORTAL_PUBLIC_URL": f"https://portal.{fqdn}" if fqdn else f"http://{server_ip}:3000",
+        # OTS API endpoint
+        "TAK_URL": f"{api_url}/api",
+        # OTS uses username/password, not P12 certs
+        "TAK_API_P12_PATH": "",
+        "TAK_API_P12_PASSPHRASE": "",
+        "TAK_CA_PATH": "data/certs/tak-ca.pem",
+        "TAK_REVOKE_ON_DISABLE": "true",
+        "TAK_DEBUG": "false",
+        "TAK_BYPASS_ENABLED": "false",
+        "CLOUDTAK_URL": "",
+        "BRAND_THEME": "dark",
+        "BRAND_LOGO_URL": "",
+        # SSH settings for privileged operations
+        "TAK_SSH_HOST": ssh_host,
+        "TAK_SSH_PORT": "22",
+        "TAK_SSH_USER": ssh_user,
+        "TAK_SSH_PRIVATE_KEY_PATH": "data/ssh/tak_ssh_ed25519",
+        "TAK_SSH_PUBLIC_KEY_PATH": "data/ssh/tak_ssh_ed25519.pub",
+        "TAK_SSH_PASSPHRASE": "",
+    }
+
+    # Check if SSH keypair exists
+    ssh_key_path = os.path.expanduser('~/TAK-Portal/data/ssh/tak_ssh_ed25519')
+    if os.path.exists(ssh_key_path):
+        built["TAK_SSH_ONBOARDED"] = "true"
+
+    return built
+
+
 def deploy(ctx, job, params):
     """8-step deploy: Docker check, clone, RabbitMQ, config, build, firewall, certs, register."""
     import secrets as _sec
@@ -707,6 +792,15 @@ def register(ctx):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
+    def takportal_settings_view():
+        """Get TAK Portal settings for OTS integration."""
+        try:
+            settings = ctx['load_settings']()
+            portal_settings = build_takportal_settings(ctx, settings)
+            return jsonify(portal_settings)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
     register_module({
         'key': 'ots',
         'api_base': '/api/ots',
@@ -740,6 +834,8 @@ def register(ctx):
              'endpoint': 'ots_db_size', 'view': db_size_view},
             {'url': '/api/ots/vacuum', 'methods': ['POST'],
              'endpoint': 'ots_vacuum', 'view': vacuum_view},
+            {'url': '/api/ots/takportal-settings', 'methods': ['GET'],
+             'endpoint': 'ots_takportal_settings', 'view': takportal_settings_view},
         ],
         'ports': ['8088/tcp', '8089/tcp'],
         'service_units': [],
