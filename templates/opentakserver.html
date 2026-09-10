@@ -1,0 +1,324 @@
+{% extends 'base.html' %}
+{% block title %}OpenTAKServer — infra-TAK{% endblock %}
+{% block page_css %}
+<style>
+  .ots-status { padding: 1rem; border-radius: 8px; margin-bottom: 1rem; }
+  .ots-status.running { background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.3); }
+  .ots-status.stopped { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); }
+  .ots-status.deploying { background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.3); }
+  .ots-status.not-installed { background: rgba(107, 114, 128, 0.15); border: 1px solid rgba(107, 114, 128, 0.3); }
+  .ots-card { background: var(--bg-card, #1a1a2e); border: 1px solid var(--border, #333); border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; }
+  .ots-btn { padding: 0.5rem 1rem; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.2s; }
+  .ots-btn-primary { background: #3b82f6; color: white; }
+  .ots-btn-primary:hover { background: #2563eb; }
+  .ots-btn-danger { background: #ef4444; color: white; }
+  .ots-btn-danger:hover { background: #dc2626; }
+  .ots-btn-success { background: #22c55e; color: white; }
+  .ots-btn-success:hover { background: #16a34a; }
+  .ots-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .ots-log { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 1rem; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; max-height: 400px; overflow-y: auto; white-space: pre-wrap; color: #c9d1d9; }
+  .ots-field { margin-bottom: 1rem; }
+  .ots-field label { display: block; margin-bottom: 0.25rem; font-weight: 600; color: var(--text-primary, #e5e7eb); }
+  .ots-field input, .ots-field select { width: 100%; padding: 0.5rem; border: 1px solid var(--border, #333); border-radius: 6px; background: var(--bg-input, #0d1117); color: var(--text-primary, #e5e7eb); }
+  .ots-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }
+  .ots-badge { display: inline-block; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+  .ots-badge-green { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+  .ots-badge-red { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+  .ots-badge-yellow { background: rgba(234, 179, 8, 0.2); color: #eab308; }
+  .ots-ports { font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
+  .ots-ports td { padding: 0.25rem 0.5rem; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="main">
+  <h1 style="margin-bottom: 0.5rem;">🌐 OpenTAKServer</h1>
+  <p style="color: var(--text-dim, #9ca3af); margin-bottom: 1.5rem;">
+    Python-based open source TAK Server — RabbitMQ, SQLite, built-in CA
+  </p>
+
+  <!-- Status Banner -->
+  <div id="ots-status" class="ots-status not-installed">
+    <span id="ots-status-text">Checking status...</span>
+  </div>
+
+  <!-- Not Installed: Deploy Card -->
+  <div id="ots-deploy-card" class="ots-card" style="display: none;">
+    <h2 style="margin-bottom: 1rem;">Deploy OpenTAKServer</h2>
+    <p style="color: var(--text-dim, #9ca3af); margin-bottom: 1rem;">
+      Configure your Certificate Authority and deploy. Requires Docker.
+    </p>
+    <div class="ots-grid">
+      <div class="ots-field">
+        <label>CA Country</label>
+        <input type="text" id="ots-ca-country" value="WW" maxlength="2">
+      </div>
+      <div class="ots-field">
+        <label>CA State</label>
+        <input type="text" id="ots-ca-state" value="XX">
+      </div>
+      <div class="ots-field">
+        <label>CA City</label>
+        <input type="text" id="ots-ca-city" value="YY">
+      </div>
+      <div class="ots-field">
+        <label>CA Organization</label>
+        <input type="text" id="ots-ca-org" value="ZZ">
+      </div>
+      <div class="ots-field">
+        <label>CA Organizational Unit</label>
+        <input type="text" id="ots-ca-ou" value="">
+      </div>
+      <div class="ots-field">
+        <label>CA Name</label>
+        <input type="text" id="ots-ca-name" value="OpenTAKServer-CA">
+      </div>
+    </div>
+    <div class="ots-field" style="margin-top: 1rem;">
+      <label>
+        <input type="checkbox" id="ots-ldap-enabled"> Enable LDAP (requires Authentik)
+      </label>
+    </div>
+    <div style="margin-top: 1rem;">
+      <button class="ots-btn ots-btn-primary" id="ots-deploy-btn" onclick="startDeploy()">
+        Deploy OpenTAKServer
+      </button>
+    </div>
+    <!-- Deploy Log -->
+    <div id="ots-deploy-log" class="ots-log" style="display: none; margin-top: 1rem;"></div>
+  </div>
+
+  <!-- Installed: Control Card -->
+  <div id="ots-control-card" class="ots-card" style="display: none;">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+      <h2 style="margin: 0;">Controls</h2>
+      <div>
+        <button class="ots-btn ots-btn-success" onclick="controlAction('start')">Start</button>
+        <button class="ots-btn ots-btn-danger" onclick="controlAction('stop')">Stop</button>
+        <button class="ots-btn ots-btn-primary" onclick="controlAction('restart')">Restart</button>
+      </div>
+    </div>
+
+    <!-- Version Info -->
+    <div id="ots-version-info" style="margin-bottom: 1rem; color: var(--text-dim, #9ca3af);"></div>
+
+    <!-- Access Links -->
+    <div style="margin-bottom: 1rem;">
+      <h3 style="margin-bottom: 0.5rem;">Access</h3>
+      <div class="ots-ports">
+        <table>
+          <tr><td>CoT TCP:</td><td><code>port 8088</code></td></tr>
+          <tr><td>CoT SSL:</td><td><code>port 8089</code></td></tr>
+          <tr><td>Enrollment:</td><td><code>port 8446</code></td></tr>
+        </table>
+      </div>
+    </div>
+
+    <!-- Logs -->
+    <div style="margin-bottom: 1rem;">
+      <h3 style="margin-bottom: 0.5rem;">Container Logs</h3>
+      <button class="ots-btn ots-btn-primary" onclick="loadLogs()" style="margin-bottom: 0.5rem;">Refresh Logs</button>
+      <div id="ots-logs" class="ots-log">Click "Refresh Logs" to load.</div>
+    </div>
+
+    <!-- Update -->
+    <div style="margin-bottom: 1rem;">
+      <h3 style="margin-bottom: 0.5rem;">Update</h3>
+      <button class="ots-btn ots-btn-primary" id="ots-update-btn" onclick="startUpdate()">Update Now</button>
+      <div id="ots-update-log" class="ots-log" style="display: none; margin-top: 0.5rem;"></div>
+    </div>
+
+    <!-- Uninstall -->
+    <div>
+      <button class="ots-btn ots-btn-danger" onclick="confirmUninstall()">Remove OpenTAKServer</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '/api/ots';
+let deployPolling = null;
+let updatePolling = null;
+
+async function checkStatus() {
+  try {
+    const r = await fetch(`${API}/deploy-status`, {credentials: 'same-origin'});
+    const d = await r.json();
+    const el = document.getElementById('ots-status');
+    const txt = document.getElementById('ots-status-text');
+    const deployCard = document.getElementById('ots-deploy-card');
+    const controlCard = document.getElementById('ots-control-card');
+
+    if (d.running) {
+      el.className = 'ots-status deploying';
+      txt.textContent = 'Deploying...';
+      deployCard.style.display = 'block';
+      controlCard.style.display = 'none';
+      return;
+    }
+
+    // Check if installed via version endpoint
+    const vr = await fetch(`${API}/version`, {credentials: 'same-origin'});
+    const vi = await vr.json();
+    if (vi.version) {
+      el.className = 'ots-status running';
+      txt.innerHTML = `Running — <span class="ots-badge ots-badge-green">${vi.version}</span>`;
+      deployCard.style.display = 'none';
+      controlCard.style.display = 'block';
+      document.getElementById('ots-version-info').textContent =
+        vi.update_available ? `Update available: ${vi.latest}` : 'Up to date';
+    } else {
+      el.className = 'ots-status not-installed';
+      txt.textContent = 'Not installed';
+      deployCard.style.display = 'block';
+      controlCard.style.display = 'none';
+    }
+  } catch (e) {
+    console.error('Status check failed:', e);
+  }
+}
+
+async function startDeploy() {
+  const btn = document.getElementById('ots-deploy-btn');
+  btn.disabled = true;
+  btn.textContent = 'Deploying...';
+  const logEl = document.getElementById('ots-deploy-log');
+  logEl.style.display = 'block';
+  logEl.textContent = 'Starting deployment...\n';
+
+  const params = {
+    ca_country: document.getElementById('ots-ca-country').value,
+    ca_state: document.getElementById('ots-ca-state').value,
+    ca_city: document.getElementById('ots-ca-city').value,
+    ca_org: document.getElementById('ots-ca-org').value,
+    ca_ou: document.getElementById('ots-ca-ou').value,
+    ca_name: document.getElementById('ots-ca-name').value,
+    ldap_enabled: document.getElementById('ots-ldap-enabled').checked,
+  };
+
+  try {
+    const r = await fetch(`${API}/deploy`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'same-origin',
+      body: JSON.stringify(params)
+    });
+    const d = await r.json();
+    if (!d.success) {
+      logEl.textContent += `Error: ${d.error}\n`;
+      btn.disabled = false;
+      btn.textContent = 'Deploy OpenTAKServer';
+      return;
+    }
+    // Poll deploy log
+    deployPolling = setInterval(pollDeployLog, 1000);
+  } catch (e) {
+    logEl.textContent += `Error: ${e.message}\n`;
+    btn.disabled = false;
+    btn.textContent = 'Deploy OpenTAKServer';
+  }
+}
+
+async function pollDeployLog() {
+  try {
+    const r = await fetch(`${API}/deploy-status`, {credentials: 'same-origin'});
+    const d = await r.json();
+    const logEl = document.getElementById('ots-deploy-log');
+    logEl.textContent = d.log.join('\n');
+    logEl.scrollTop = logEl.scrollHeight;
+    if (!d.running) {
+      clearInterval(deployPolling);
+      document.getElementById('ots-deploy-btn').disabled = false;
+      document.getElementById('ots-deploy-btn').textContent = 'Deploy OpenTAKServer';
+      setTimeout(checkStatus, 1000);
+    }
+  } catch (e) {}
+}
+
+async function controlAction(action) {
+  try {
+    await fetch(`${API}/control`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'same-origin',
+      body: JSON.stringify({action: action})
+    });
+    setTimeout(checkStatus, 2000);
+  } catch (e) {
+    console.error('Control action failed:', e);
+  }
+}
+
+async function loadLogs() {
+  try {
+    const r = await fetch(`${API}/logs`, {credentials: 'same-origin'});
+    const d = await r.json();
+    document.getElementById('ots-logs').textContent = d.lines.join('\n') || 'No logs available.';
+  } catch (e) {
+    document.getElementById('ots-logs').textContent = `Error loading logs: ${e.message}`;
+  }
+}
+
+async function startUpdate() {
+  const btn = document.getElementById('ots-update-btn');
+  btn.disabled = true;
+  const logEl = document.getElementById('ots-update-log');
+  logEl.style.display = 'block';
+  logEl.textContent = 'Starting update...\n';
+
+  try {
+    const r = await fetch(`${API}/update`, {method: 'POST', credentials: 'same-origin'});
+    const d = await r.json();
+    if (!d.started) {
+      logEl.textContent += `${d.error}\n`;
+      btn.disabled = false;
+      return;
+    }
+    updatePolling = setInterval(pollUpdateLog, 1000);
+  } catch (e) {
+    logEl.textContent += `Error: ${e.message}\n`;
+    btn.disabled = false;
+  }
+}
+
+async function pollUpdateLog() {
+  try {
+    const r = await fetch(`${API}/update-status`, {credentials: 'same-origin'});
+    const d = await r.json();
+    const logEl = document.getElementById('ots-update-log');
+    logEl.textContent = d.log.join('\n');
+    logEl.scrollTop = logEl.scrollHeight;
+    if (!d.running) {
+      clearInterval(updatePolling);
+      document.getElementById('ots-update-btn').disabled = false;
+      setTimeout(checkStatus, 1000);
+    }
+  } catch (e) {}
+}
+
+async function confirmUninstall() {
+  if (!confirm('Remove OpenTAKServer? This will stop and remove all containers.')) return;
+  const password = prompt('Enter admin password to confirm:');
+  if (!password) return;
+  try {
+    const r = await fetch(`${API}/uninstall`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'same-origin',
+      body: JSON.stringify({password: password})
+    });
+    const d = await r.json();
+    if (d.success) {
+      alert('OpenTAKServer removed.');
+      checkStatus();
+    } else {
+      alert(`Error: ${d.error || 'Unknown error'}`);
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
+// Initial load
+checkStatus();
+</script>
+{% endblock %}
