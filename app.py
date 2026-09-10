@@ -78,6 +78,7 @@ import os, re, ssl, json, secrets, subprocess, time, psutil, threading, html, sh
 import hmac
 import urllib.request
 import urllib.parse
+import urllib.error
 from datetime import datetime, timedelta
 from collections import defaultdict, deque
 
@@ -964,7 +965,7 @@ def apply_security_headers(response):
     if request.is_secure or xf_proto == 'https':
         response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
     return response
-VERSION = "10.1.60-alpha"
+VERSION = "10.1.62-alpha"
 GITHUB_REPO = "takwerx/infra-TAK"
 
 # --- AGPL section 13: offer the Corresponding Source to network users ---------
@@ -3055,6 +3056,20 @@ def detect_modules():
             'icon_url': '/static/logos/tak-video-restreamer-logo.png',
             'route': '/tak-video-restreamer', 'priority': 13, 'conflicts': ['mediamtx']}
 
+    # TAK Simulator — registry-resident (modules/simulator.py, v10.1.61). Dev-channel gate
+    # (guide §10): the tile exists only on dev-channel boxes or where it is already installed.
+    _sim_desc = mod_registry.MODULES.get('simulator')
+    if _sim_desc:
+        try:
+            _sim_state = _sim_desc['detect'](mod_registry.get_ctx())
+        except Exception:
+            _sim_state = {}
+        if _sim_state.get('installed') or (settings.get('update_channel') or 'main').strip().lower() == 'dev':
+            modules['simulator'] = {'name': _sim_desc['name'],
+                'installed': bool(_sim_state.get('installed')), 'running': bool(_sim_state.get('running')),
+                'description': _sim_desc['description'], 'icon': _sim_desc['icon'],
+                'route': _sim_desc['route'], 'priority': _sim_desc['priority'], 'conflicts': []}
+
     # NetBird VPN
     netbird_enabled = settings.get('netbird_enabled', False)
     netbird_running = False
@@ -3486,6 +3501,9 @@ def render_sidebar(modules, active_path, takwerx_logo_url=None):
     tvr = modules.get('tak_video_restreamer', {})
     if tvr.get('installed'):
         parts.append(link('/tak-video-restreamer', '<img src="/static/logos/tak-video-restreamer-logo.png" alt="TAK Video Restreamer" class="nav-icon" style="height:24px;width:auto;max-width:48px;object-fit:contain;display:block"><span>TAK Video Restreamer</span>', 'TAK Video Restreamer'))
+    simm = modules.get('simulator', {})
+    if simm.get('installed'):
+        parts.append(link('/simulator', '<span class="nav-icon" style="font-size:22px;line-height:1;display:block">\U0001F3AF</span><span>TAK Simulator</span>', 'TAK Simulator'))
     nr = modules.get('nodered', {})
     if nr.get('installed'):
         parts.append(link('/nodered', f'<img src="{html.escape(NODERED_LOGO_URL)}" alt="" class="nav-icon" style="height:24px;width:auto;max-width:72px;object-fit:contain;display:block"><span>Node-RED</span>'))
@@ -14243,6 +14261,7 @@ def guarddog_page():
         {'id': 'takportal', 'name': 'TAK Portal', 'monitored': modules.get('takportal', {}).get('installed'), 'monitors': [{'name': 'Container', 'id': 'takportal_ctr', 'interval': '1 min', 'desc': 'Checks TAK Portal container is running. Alert and auto-restart after 3 failures. 15 min boot skip + cooldown to avoid restart loops.'}]},
         {'id': 'mediamtx', 'name': 'MediaMTX', 'monitored': modules.get('mediamtx', {}).get('installed'), 'monitors': [{'name': 'Service', 'id': 'mediamtx_svc', 'interval': '1 min', 'desc': 'Checks systemd mediamtx. Alert and restart after 3 failures. 15 min boot skip + cooldown to avoid restart loops.'}]},
         {'id': 'tak_video_restreamer', 'name': 'TAK Video Restreamer', 'monitored': modules.get('tak_video_restreamer', {}).get('installed'), 'monitors': [{'name': 'Container / HTTP', 'id': 'tvr_http', 'interval': '1 min', 'desc': 'Checks tak-video-restreamer container health (GET /login on port 3100). Alert and restart after 3 failures. 15 min boot skip + cooldown to avoid restart loops.'}]},
+        {'id': 'simulator', 'name': 'TAK Simulator', 'monitored': modules.get('simulator', {}).get('installed'), 'monitors': [{'name': 'Container', 'id': 'simulator_ctr', 'interval': '1 min', 'desc': 'Checks the tak-simulator container is running (liveness only). A scenario that is not running is normal and never alerts.'}]},
         {'id': 'nodered', 'name': 'Node-RED', 'monitored': modules.get('nodered', {}).get('installed'), 'monitors': [{'name': 'Container / HTTP', 'id': 'nodered_http', 'interval': '1 min', 'desc': 'Checks Node-RED HTTP (1880). Alert and restart after 3 failures. 15 min boot skip + cooldown to avoid restart loops.'}]},
         {'id': 'cloudtak', 'name': 'CloudTAK', 'monitored': modules.get('cloudtak', {}).get('installed'), 'monitors': [{'name': 'Container', 'id': 'cloudtak_ctr', 'interval': '1 min', 'desc': 'Checks CloudTAK container. Alert and restart after 3 failures. 15 min boot skip + cooldown to avoid restart loops.'}]},
         {'id': 'updates', 'name': 'Updates', 'monitored': gd.get('installed'), 'monitors': [{'name': 'Update check', 'id': 'updates_check', 'interval': '6 h', 'desc': 'Checks for newer versions of infra-TAK, Authentik, MediaMTX, CloudTAK, and TAK Portal (same sources as the console update icons). Sends one email when any update is available (or when the set of available updates changes). Uses same alert email as other monitors. If this monitor is red or missing, click Update Guard Dog above to reinstall/update timers and scripts.'}]},
@@ -18941,6 +18960,11 @@ def _guarddog_health_check(service_id):
                 _sudo_wrap(['docker', 'inspect', '--format', '{{.State.Running}}', 'tak-video-restreamer']),
                 capture_output=True, text=True, timeout=5)
             return r.stdout.strip() == 'true'
+        if service_id == 'simulator':
+            r = subprocess.run(
+                _sudo_wrap(['docker', 'inspect', '--format', '{{.State.Running}}', 'tak-simulator']),
+                capture_output=True, text=True, timeout=5)
+            return (r.stdout or '').strip() == 'true'
         if service_id == 'nodered':
             settings = load_settings()
             nr_cfg = _get_module_deployment_config(settings, 'nodered_deployment')
@@ -19016,6 +19040,7 @@ def _guarddog_service_monitor_ids(settings):
         'takportal': ['takportal_ctr'],
         'mediamtx': ['mediamtx_svc'],
         'tak_video_restreamer': ['tvr_http'],
+        'simulator': ['simulator_ctr'],
         'nodered': ['nodered_http'],
         'cloudtak': ['cloudtak_ctr'],
         'updates': ['updates_check'],
@@ -19045,6 +19070,8 @@ def _guarddog_monitored_service_ids(settings):
         ids.append('mediamtx')
     if modules.get('tak_video_restreamer', {}).get('installed'):
         ids.append('tak_video_restreamer')
+    if modules.get('simulator', {}).get('installed'):
+        ids.append('simulator')
     if modules.get('nodered', {}).get('installed'):
         ids.append('nodered')
     if modules.get('cloudtak', {}).get('installed'):
@@ -19681,6 +19708,11 @@ def _monitor_health_check(monitor_id):
                     return resp.status == 200
             except Exception:
                 return False
+        if monitor_id == 'simulator_ctr':
+            # v10.1.61: container liveness only — a stopped scenario is normal (PLAN §4.5)
+            r = subprocess.run(_sudo_wrap(['docker', 'inspect', '--format', '{{.State.Running}}', 'tak-simulator']),
+                               capture_output=True, text=True, timeout=5)
+            return (r.stdout or '').strip() == 'true'
         if monitor_id == 'takportal_ctr':
             return _takportal_web_running()  # v10.1.59: the WEB service, exact — not a substring
         if monitor_id == 'cloudtak_ctr':
@@ -30538,6 +30570,9 @@ def get_all_module_versions():
     if modules.get('tak_video_restreamer', {}).get('installed'):
         # registry-resident since v10.1.24 — modules/tvr.py owns the SHA compare
         _set('tak_video_restreamer', lambda: mod_registry.tvr.get_version_info(mod_registry.get_ctx()))
+    if modules.get('simulator', {}).get('installed'):
+        # v10.1.61: engine ships inside the console — 'update' = rebuild on a version change
+        _set('simulator', lambda: mod_registry.simulator.get_version_info(mod_registry.get_ctx()))
     if modules.get('netbird', {}).get('installed'):
         _set('netbird', _get_netbird_version_info)
     if modules.get('remote_assist', {}).get('installed'):
@@ -34506,6 +34541,35 @@ CLOUDTAK_PLUGINS = [
         'author': 'takwerx',
         'license': 'Proprietary',
     },
+    {
+        'key': 'taksim',
+        'name': 'TAK Simulator',
+        'description': (
+            'Design and direct a simulation on the CloudTAK map: drop a sweeping radar, '
+            'aircraft, vessels and ground units, steer them live (go to, orbit, hold, course, '
+            'altitude, lost link), fire chat / CASEVAC / 911, draw shapes, save the layout as a '
+            'scenario, and clear everything with one button. Drives the TAK Simulator engine on '
+            'this box — everything stays on the simulation channel unless a real channel is '
+            'deliberately confirmed. Requires the TAK Simulator module (dev channel).'
+        ),
+        # v10.1.61 W11: ships in this repo (local_path → copied, never symlinked, into
+        # web/plugins/taksim; server_path → api/stateless/routes/plugin-taksim.ts). Not
+        # auto-installed by the simulator deploy — a CloudTAK rebuild is 5–10 min — the
+        # Simulator page offers an "Install CloudTAK panel" button that calls the plugin
+        # action route. Dev-only until the module leaves the dev channel.
+        'local_path': os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cloudtak-plugins', 'taksim', 'plugin'),
+        'server_path': os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cloudtak-plugins', 'taksim', 'server'),
+        'install_dir': 'taksim',
+        'requires': 'CloudTAK 13.45+',
+        'author': 'TAKWERX',
+        'license': 'AGPL-3.0-or-later',
+        # Listed only on dev-channel boxes (or wherever it is already installed, so it can
+        # still be updated/removed after a channel flip) — same gate as the module's tile.
+        'dev_only': True,
+        # v10.1.62: and only once the TAK Simulator module is deployed on this box — the panel
+        # is a remote control for that engine and does nothing without it (operator, 2026-09-10).
+        'requires_module': 'simulator',
+    },
 ]
 
 cloudtak_plugin_log = []
@@ -35661,9 +35725,16 @@ def _detect_cloudtak_plugins():
     ct_dir = os.path.expanduser('~/CloudTAK')
     plugins_base = os.path.join(ct_dir, 'api', 'web', 'plugins')
     result = []
+    _settings = load_settings()
+    _dev_box = (_settings.get('update_channel') or 'main').strip().lower() == 'dev'
+    _modules_on = {'simulator': bool(_settings.get('simulator_enabled'))}
     for p in CLOUDTAK_PLUGINS:
         install_path = os.path.join(plugins_base, p['install_dir'])
         installed = os.path.isdir(install_path) or os.path.islink(install_path)
+        if p.get('dev_only') and not _dev_box and not installed:
+            continue        # v10.1.61: dev-only plugins stay out of a main-channel catalog
+        if p.get('requires_module') and not installed and not _modules_on.get(p['requires_module']):
+            continue        # v10.1.62: a plugin that only drives a module is listed once that module is deployed
         is_local  = bool(p.get('local_path'))
         sha = None
         update_available = False
@@ -35970,9 +36041,18 @@ def _run_cloudtak_plugin_action(plugin_key, action):
             try:
                 _req = urllib.request.Request('http://127.0.0.1:5000/api/server', method='GET')
                 with urllib.request.urlopen(_req, timeout=5) as _resp:
-                    if _resp.status == 200:
+                    if _resp.status < 500:
                         _api_up = True
                         break
+            except urllib.error.HTTPError as _he:
+                # /api/server answers 401 "No Auth Present" to an anonymous probe — that IS
+                # the API up and bound. Requiring a 200 here meant this loop could never
+                # succeed: every plugin install/update sat out the full 10 minutes and then
+                # printed the "not confirmed up" warning on a healthy box (test6, 2026-09-09).
+                # Same rule as the deploy-time probe: anything below 500 is alive.
+                if _he.code < 500:
+                    _api_up = True
+                    break
             except Exception:
                 pass
             if _i >= 3:  # give a healthy start ~60s of grace before probing for the loop
@@ -36205,6 +36285,36 @@ def _cloudtak_build_override_yml(settings):
                             and bool(settings.get('console_cert_docker_san'))
                             and os.path.isfile(console_cert_src))
 
+    # v10.1.61 W10: when the TAK Simulator is deployed on this box, the api container joins
+    # the private `infratak` network (the one Portal <-> Authentik already use) and learns
+    # where the engine is plus its bearer token, so the CloudTAK plugin's server route
+    # (plugin-taksim.ts) can drive the engine. The browser never sees the token. Local
+    # CloudTAK only: a remote CloudTAK has neither the network nor the engine. The network
+    # is declared external, so make sure it exists before compose reads this file.
+    _sim_env_block = ''
+    _sim_net_block = ''
+    _sim_networks_top = ''
+    if settings.get('simulator_enabled') and not _ct_is_remote:
+        _ensure_infratak_docker_network()
+        _sim_tok = ''.join(c for c in (settings.get('simulator_control_token') or '') if c.isalnum() or c in '_-')
+        _sim_env_block = (
+            '      # v10.1.61 W10: TAK Simulator engine — reachable on the private infratak\n'
+            '      # network only, bearer-gated; consumed by the CloudTAK plugin server route.\n'
+            '      TAKSIM_ENGINE_URL: "http://tak-simulator:5090"\n'
+            f'      TAKSIM_ENGINE_TOKEN: "{_sim_tok}"\n'
+        )
+        _sim_net_block = (
+            '    networks:\n'
+            '      - default\n'
+            f'      - {INFRATAK_DOCKER_NETWORK}\n'
+        )
+        _sim_networks_top = (
+            '\nnetworks:\n'
+            '  default: {}\n'
+            f'  {INFRATAK_DOCKER_NETWORK}:\n'
+            '    external: true\n'
+        )
+
     # W5/W5e media-infra pin — arch-conditional, see the comment in the template below.
     media_image = ('ghcr.io/dfpc-coe/media-infra:v9.1.1'
                    if (settings.get('arch') or '').lower() in ('arm64', 'aarch64')
@@ -36241,7 +36351,7 @@ services:
     extra_hosts:
 {hosts_block}
     environment:
-{tls_env_block}{cert_vol_block}
+{tls_env_block}{_sim_env_block}{cert_vol_block}{_sim_net_block}
   events:
     extra_hosts:
 {hosts_block}
@@ -36270,7 +36380,67 @@ services:
   postgis:
     environment:
       POSTGRES_PASSWORD: "${{POSTGRES_PASSWORD:-docker}}"
-"""
+{_sim_networks_top}"""
+
+
+def _cloudtak_refresh_override(plog=None):
+    """v10.1.61 W10: rewrite CloudTAK's compose override from current settings and, when
+    it changed, recreate ONLY the api service (`up -d --no-deps api`). The simulator module
+    calls this on deploy and uninstall so the api container joins / leaves the infratak
+    network and gets / loses the engine URL + token. Local CloudTAK only; a no-op when it
+    is not installed here. Returns (changed, message)."""
+    _log = plog or (lambda m: print(m, flush=True))
+    ct_dir = os.path.expanduser('~/CloudTAK')
+    if not (os.path.exists(os.path.join(ct_dir, 'docker-compose.yml'))
+            or os.path.exists(os.path.join(ct_dir, 'compose.yaml'))):
+        return False, 'CloudTAK is not installed on this box'
+    settings = load_settings()
+    try:
+        if _get_cloudtak_deployment_config(settings).get('target_mode') == 'remote':
+            return False, 'CloudTAK runs on a remote host — nothing to link'
+    except Exception:
+        pass
+    override_path = os.path.join(ct_dir, 'docker-compose.override.yml')
+    new = _cloudtak_build_override_yml(settings)
+    old = ''
+    if os.path.exists(override_path):
+        with open(override_path) as f:
+            old = f.read()
+    if settings.get('simulator_enabled'):
+        try:
+            os.chmod(override_path, 0o600)  # carries the engine token — also when another
+        except OSError:                     # writer (startup migration) left it at 644
+            pass
+    if old.strip() == new.strip():
+        return False, 'CloudTAK override already current'
+    with open(override_path, 'w') as f:
+        f.write(new)
+    try:
+        os.chmod(override_path, 0o600)
+    except OSError:
+        pass
+    _log('  CloudTAK override rewritten — recreating the api container (no other service touched)...')
+    r = _broker_compose(ct_dir, 'up -d --no-deps api', timeout=240)
+    if r.returncode != 0:
+        return True, f'override written but the api recreate failed: {(r.stderr or r.stdout or "")[-300:]}'
+    # v10.1.62 T&E finding (nuc, 2026-09-09): recreating the api container from its image
+    # wipes the sprite-regen guard the icon self-heal patches in, and a box carrying one
+    # undecodable icon then crash-loops on `vipspng: libpng read error` at API boot
+    # (dfpc-coe/CloudTAK#1623) — RestartCount 20 within 18 min, nothing watching, because
+    # only the console boot, the CloudTAK update and the plugin-rebuild paths armed the
+    # watch. This is the third recreate path; it arms the same self-gating 8-check /
+    # ~15-min watch (a docker inspect every 2 min on a healthy box).
+    def _simlink_icon_watch():
+        for _i in range(8):
+            time.sleep(90 if _i == 0 else 120)
+            try:
+                _selfheal_cloudtak_corrupt_icons(
+                    plog=lambda m: print(f"[simlink-iconheal] {m}", flush=True))
+            except Exception:
+                pass
+    threading.Thread(target=_simlink_icon_watch, daemon=True, name='cloudtak-simlink-icon-heal').start()
+    _log('  (sprite-regen self-heal armed for the next ~15 min — dfpc-coe/CloudTAK#1623)')
+    return True, 'CloudTAK api container recreated with the new override'
 
 
 # --- CloudTAK embedded-MediaMTX (cloudtak-media) self-heal scripts (v0.9.48) ----
@@ -39322,6 +39492,54 @@ def tvr_page():
         deploying=_tvr_job.get('running', False),
         deploy_log=_tvr_job.get('log', []),
         deploy_error=_tvr_job.get('error', False),
+        metrics=get_system_metrics(), version=VERSION))
+    r.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+    return r
+
+
+@app.route('/simulator')
+@login_required
+def simulator_page():
+    """TAK Simulator page (v10.1.61) — registry module; dev-channel gated like its tile."""
+    from flask import make_response, abort
+    settings = load_settings()
+    modules = detect_modules()
+    sim = modules.get('simulator', {})
+    if not mod_registry.MODULES.get('simulator') or (
+            not sim and (settings.get('update_channel') or 'main').strip().lower() != 'dev'):
+        abort(404)
+    sim_vinfo = mod_registry.simulator.get_version_info(mod_registry.get_ctx()) if sim.get('installed') else {}
+    _job = mod_registry.job_state('simulator')
+    preflight = []
+    if not sim.get('installed'):
+        import socket as _sock
+
+        def _tcp(port):
+            try:
+                with _sock.create_connection(('127.0.0.1', port), timeout=2):
+                    return True
+            except OSError:
+                return False
+        _ak_tok = (_get_authentik_env_value(settings, 'AUTHENTIK_BOOTSTRAP_TOKEN')
+                   or _get_authentik_env_value(settings, 'AUTHENTIK_TOKEN'))
+        _drc, _dv = _docker_probe()
+        preflight = [
+            {'label': 'TAK Server installed on this box', 'ok': bool(modules.get('takserver', {}).get('installed')), 'detail': ''},
+            {'label': 'Authentik installed (lane identities are LDAP users)', 'ok': bool(_ak_tok), 'detail': ''},
+            {'label': 'TAK Server streaming port 8089 reachable', 'ok': _tcp(8089), 'detail': '127.0.0.1:8089'},
+            {'label': 'TAK Server enrollment port 8446 reachable', 'ok': _tcp(8446), 'detail': '127.0.0.1:8446'},
+            {'label': 'Docker present', 'ok': _drc == 0, 'detail': _dv if _drc == 0 else 'installed during deploy if missing'},
+        ]
+    preflight_ok = all(p['ok'] for p in preflight if not p['label'].startswith('Docker')) if preflight else True
+    _tp_host = _get_service_domain(settings, 'takportal') if modules.get('takportal', {}).get('installed') else ''
+    r = make_response(render_template('simulator.html',
+        settings=settings, modules=modules, sim=sim, sim_vinfo=sim_vinfo,
+        sim_lanes=list(settings.get('simulator_lanes') or []),
+        default_channel=settings.get('simulator_default_channel') or 'tak_simulation',
+        takportal_url=f'https://{_tp_host}' if _tp_host else '',
+        preflight=preflight, preflight_ok=preflight_ok,
+        fqdn=settings.get('fqdn', ''), server_ip=settings.get('server_ip', ''),
+        deploying=_job.get('running', False), deploy_log=_job.get('log', []), deploy_error=_job.get('error', False),
         metrics=get_system_metrics(), version=VERSION))
     r.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
     return r
@@ -63410,6 +63628,23 @@ def upload_takserver_package():
         fn = secure_filename(raw_name)
         if not fn:
             return jsonify({'error': f'Invalid filename: {raw_name[:64]}'}), 400
+        # Normalize the EXTENSION to lower case before anything looks at it.
+        #
+        # Every classifier here, and ~25 `endswith('.deb')` sites downstream in the
+        # deploy/update routes, are case-sensitive. A file that arrives as
+        # TAKSERVER-DOCKER-HARDENED-5.8-RELEASE-75.ZIP therefore matched none of them:
+        # it uploaded, sat in the uploads directory, and was invisible to every path
+        # that goes looking for a bundle — "infra-TAK seems to not find it, because it
+        # is named differently" (GH #66, 2026-09-08). tak.gov hands out mixed-case
+        # names, and an operator renaming a file should not be a prerequisite.
+        #
+        # Doing it once, here, fixes the classifiers below AND every downstream reader,
+        # because what lands on disk now ends in a lower-case extension. The base name
+        # is left alone: it is what the version parser reads, and that regex is already
+        # case-insensitive.
+        _stem, _ext = os.path.splitext(fn)
+        if _ext and _ext != _ext.lower():
+            fn = _stem + _ext.lower()
         fp = os.path.join(UPLOAD_DIR, fn)
         f.save(fp)
         sz = round(os.path.getsize(fp) / (1024*1024), 1)
@@ -63499,6 +63734,11 @@ def upload_fedhub_package():
         fn = secure_filename(raw_name)
         if not fn:
             return jsonify({'error': f'Invalid filename: {raw_name[:64]}'}), 400
+        # Same lower-casing as the TAK Server upload: a `.DEB` from tak.gov would
+        # otherwise be rejected outright as "must be a .deb file" (GH #66).
+        _stem, _ext = os.path.splitext(fn)
+        if _ext and _ext != _ext.lower():
+            fn = _stem + _ext.lower()
         if not fn.endswith('.deb'):
             return jsonify({'error': 'Federation Hub upload must be a .deb file'}), 400
         fp = os.path.join(UPLOAD_DIR, fn)
@@ -69604,6 +69844,14 @@ def run_full_uninstall():
             plog(f"⚠ TAK Video Restreamer removal error (non-fatal): {e}")
         plog("✓ TAK Video Restreamer removed")
 
+        # 1c. TAK Simulator — v10.1.61: registry uninstall path (modules/simulator.py).
+        plog("━━━ TAK Simulator ━━━")
+        try:
+            mod_registry.uninstall_module('simulator', log_fn=plog)
+        except Exception as e:
+            plog(f"⚠ TAK Simulator removal error (non-fatal): {e}")
+        plog("✓ TAK Simulator removed")
+
         # 2. TAK Portal
         plog("━━━ TAK Portal ━━━")
         portal_dir = os.path.expanduser('~/TAK-Portal')
@@ -71970,6 +72218,8 @@ def _startup_harden_cloudtak_ports():
                     _of.write(_new_override)
                 _override_changed = True
                 print("Startup migration: CloudTAK override refreshed (removed stale ports: !reset)")
+            if _settings.get('simulator_enabled'):
+                os.chmod(_override_path, 0o600)     # v10.1.61 W10: carries the engine token
         except Exception:
             pass
         _changed = _patch_cloudtak_compose_ports(_ct_dir)
@@ -71981,10 +72231,10 @@ def _startup_harden_cloudtak_ports():
                 _ins = subprocess.run(
                     _sudo_wrap(['docker', 'inspect', 'cloudtak-api-1', '--format', '{{json .HostConfig.PortBindings}}']), capture_output=True, text=True, timeout=5
                 )
-                _bindings = json.loads(_ins.stdout.strip() or '{}')
-                if not _bindings.get('5000/tcp'):
+                _b = (json.loads(_ins.stdout.strip() or '{}')).get('5000/tcp') or []
+                if not _b or any((x or {}).get('HostIp') not in ('127.0.0.1', '::1') for x in _b):
                     _needs_recreate = True
-                    print("Startup migration: CloudTAK 127.0.0.1:5000 binding absent — recreating")
+                    print("Startup migration: CloudTAK api is not bound to 127.0.0.1:5000 only — recreating")
             except Exception:
                 pass
         if _needs_recreate:
@@ -76745,6 +76995,7 @@ def _post_update_auto_deploy():
                             pass
 
                     # 4. Write hardened override (always, idempotent)
+                    _override_written = False
                     try:
                         _override_path = os.path.join(_cloudtak_dir, 'docker-compose.override.yml')
                         _settings = load_settings()
@@ -76759,6 +77010,11 @@ def _post_update_auto_deploy():
                         if _existing.strip() != _new_override.strip():
                             with open(_override_path, 'w') as _of:
                                 _of.write(_new_override)
+                            _override_written = True
+                            try:
+                                os.chmod(_override_path, 0o600)   # carries TAKSIM_ENGINE_TOKEN when the simulator is on
+                            except OSError:
+                                pass
                             print("  CloudTAK override updated (postgis/store host ports locked down)")
                     except Exception as _ove:
                         print(f"  WARNING: override write failed: {_ove}")
@@ -76767,6 +77023,7 @@ def _post_update_auto_deploy():
                     # `ports: !reset` in the override is NOT used because Docker
                     # Compose v5.x (shipped with Docker Engine 27+) resolves that
                     # YAML tag to null, dropping ALL port bindings silently.
+                    _base_patched = False
                     try:
                         _base_patched = _patch_cloudtak_compose_ports(_cloudtak_dir)
                         if _base_patched:
@@ -76807,22 +77064,47 @@ def _post_update_auto_deploy():
                     except Exception as _ue:
                         print(f"  WARNING: UFW rules failed: {_ue}")
 
-                    # 7. Recreate the stack only if clean. Compromised installs
-                    #    stay STOPPED until operator does Remove + Reinstall.
-                    if not _compromised:
+                    # 7. Recreate the stack only if clean AND something above changed.
+                    #    Compromised installs stay STOPPED until operator does Remove + Reinstall.
+                    #    Until 2026-09-09 this recreated the WHOLE stack (api, postgis, store,
+                    #    media, …) unconditionally on every post-update run — a ~40 s CloudTAK
+                    #    outage plus the media re-heal for every console update on every box,
+                    #    even when the override and the base compose were already hardened
+                    #    (test6: three console restarts in an hour, three recreates, nothing
+                    #    had changed). The startup migration that covers the same ground
+                    #    already gates on "changed, or the 127.0.0.1:5000 binding is absent";
+                    #    this is the same gate.
+                    _needs_recreate = _override_written or _base_patched
+                    if not _compromised and not _needs_recreate:
                         try:
-                            _rec = subprocess.run(
-                                _sudo_wrap(['docker', 'compose', 'up', '-d', '--force-recreate']), cwd=_cloudtak_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=240
+                            _ins = subprocess.run(
+                                _sudo_wrap(['docker', 'inspect', 'cloudtak-api-1', '--format', '{{json .HostConfig.PortBindings}}']), capture_output=True, text=True, timeout=5
                             )
-                            if _rec.returncode == 0:
-                                print("  CloudTAK recreated with hardened port bindings")
-                                # v0.9.48 (Part B+C/D): force-recreate reverted cloudtak-media
-                                # to image default — re-apply self-heal (HLS + ephemeral reaper).
-                                _cloudtak_media_hls_heal(wait=True)
-                            else:
-                                print(f"  WARNING: CloudTAK recreate returned {_rec.returncode}: {(_rec.stdout or '')[:200]}")
-                        except Exception as _re:
-                            print(f"  WARNING: CloudTAK recreate failed: {_re}")
+                            _b = (json.loads(_ins.stdout.strip() or '{}')).get('5000/tcp') or []
+                            # present is not enough: a HostIp of "" or 0.0.0.0 is published on every
+                            # interface (security review 2026-09-09, finding 1) — recreate that too
+                            if not _b or any((x or {}).get('HostIp') not in ('127.0.0.1', '::1') for x in _b):
+                                _needs_recreate = True
+                                print("  CloudTAK api is not bound to 127.0.0.1:5000 only — recreating")
+                        except Exception:
+                            _needs_recreate = True      # cannot tell: keep the old behavior
+                    if not _compromised:
+                        if not _needs_recreate:
+                            print("  CloudTAK already hardened — stack left running (no recreate)")
+                        else:
+                            try:
+                                _rec = subprocess.run(
+                                    _sudo_wrap(['docker', 'compose', 'up', '-d', '--force-recreate']), cwd=_cloudtak_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=240
+                                )
+                                if _rec.returncode == 0:
+                                    print("  CloudTAK recreated with hardened port bindings")
+                                    # v0.9.48 (Part B+C/D): force-recreate reverted cloudtak-media
+                                    # to image default — re-apply self-heal (HLS + ephemeral reaper).
+                                    _cloudtak_media_hls_heal(wait=True)
+                                else:
+                                    print(f"  WARNING: CloudTAK recreate returned {_rec.returncode}: {(_rec.stdout or '')[:200]}")
+                            except Exception as _re:
+                                print(f"  WARNING: CloudTAK recreate failed: {_re}")
                     else:
                         print("  CloudTAK left STOPPED pending operator Remove + Reinstall")
 
@@ -77612,6 +77894,13 @@ _MODULE_CTX = {
     '_get_authentik_env_value': _get_authentik_env_value,
     '_ensure_authentik_tvr_app': _ensure_authentik_tvr_app,
     '_deregister_authentik_proxy_app': _deregister_authentik_proxy_app,
+    # simulator seams (v10.1.61) — deployment config, Authentik API base, console VERSION;
+    # W10: the shared infratak network + the CloudTAK override refresh (api recreate)
+    '_get_tak_deployment_config': _get_tak_deployment_config,
+    '_get_authentik_api_url': _get_authentik_api_url,
+    '_ensure_infratak_docker_network': _ensure_infratak_docker_network,
+    '_cloudtak_refresh_override': _cloudtak_refresh_override,
+    'VERSION': VERSION,
 }
 # Deliberately NOT wrapped in try/except: a broken module file must fail fast at
 # import with a clear message (smoke.py py_compiles modules/*.py pre-pull), not
