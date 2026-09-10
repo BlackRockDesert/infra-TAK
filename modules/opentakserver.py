@@ -631,6 +631,82 @@ def register(ctx):
     def update_status_view():
         return jsonify(_update_status)
 
+    def db_size_view():
+        """Get OTS SQLite database size and stats."""
+        try:
+            dirpath = ots_dir(ctx)
+            db_path = os.path.join(dirpath, 'data', 'ots.db')
+            if not os.path.exists(db_path):
+                return jsonify({'error': 'Database not found'}), 404
+
+            # Get file size
+            size_bytes = os.path.getsize(db_path)
+            size_mb = round(size_bytes / (1024 * 1024), 2)
+
+            # Get table counts via docker exec
+            r = subprocess.run(
+                ctx['_sudo_wrap'](['docker', 'exec', OTS_CONTAINER,
+                                   'python3', '-c',
+                                   'import sqlite3; '
+                                   'conn = sqlite3.connect("/app/data/ots.db"); '
+                                   'c = conn.cursor(); '
+                                   'tables = [t[0] for t in c.execute("SELECT name FROM sqlite_master WHERE type=\'table\'").fetchall()]; '
+                                   'counts = {t: c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}; '
+                                   'import json; print(json.dumps(counts))']),
+                capture_output=True, text=True, timeout=10)
+            table_counts = {}
+            if r.returncode == 0 and r.stdout.strip():
+                try:
+                    table_counts = json.loads(r.stdout.strip())
+                except json.JSONDecodeError:
+                    pass
+
+            return jsonify({
+                'size_bytes': size_bytes,
+                'size_mb': size_mb,
+                'tables': table_counts,
+                'path': db_path
+            })
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    def vacuum_view():
+        """Run SQLite VACUUM on OTS database."""
+        try:
+            dirpath = ots_dir(ctx)
+            db_path = os.path.join(dirpath, 'data', 'ots.db')
+            if not os.path.exists(db_path):
+                return jsonify({'error': 'Database not found'}), 404
+
+            # Get size before
+            size_before = os.path.getsize(db_path)
+
+            # Run VACUUM via docker exec
+            r = subprocess.run(
+                ctx['_sudo_wrap'](['docker', 'exec', OTS_CONTAINER,
+                                   'python3', '-c',
+                                   'import sqlite3; '
+                                   'conn = sqlite3.connect("/app/data/ots.db"); '
+                                   'conn.execute("VACUUM"); '
+                                   'conn.close()']),
+                capture_output=True, text=True, timeout=300)
+
+            if r.returncode != 0:
+                return jsonify({'error': f'VACUUM failed: {r.stderr[:300]}'}), 500
+
+            # Get size after
+            size_after = os.path.getsize(db_path)
+            freed = size_before - size_after
+
+            return jsonify({
+                'success': True,
+                'size_before_mb': round(size_before / (1024 * 1024), 2),
+                'size_after_mb': round(size_after / (1024 * 1024), 2),
+                'freed_mb': round(freed / (1024 * 1024), 2)
+            })
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
     register_module({
         'key': 'ots',
         'api_base': '/api/ots',
@@ -660,6 +736,10 @@ def register(ctx):
              'endpoint': 'ots_update', 'view': update_view},
             {'url': '/api/ots/update-status', 'methods': ['GET'],
              'endpoint': 'ots_update_status', 'view': update_status_view},
+            {'url': '/api/ots/db-size', 'methods': ['GET'],
+             'endpoint': 'ots_db_size', 'view': db_size_view},
+            {'url': '/api/ots/vacuum', 'methods': ['POST'],
+             'endpoint': 'ots_vacuum', 'view': vacuum_view},
         ],
         'ports': ['8088/tcp', '8089/tcp'],
         'service_units': [],
