@@ -965,7 +965,7 @@ def apply_security_headers(response):
     if request.is_secure or xf_proto == 'https':
         response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
     return response
-VERSION = "10.1.68-alpha"
+VERSION = "10.1.69-alpha"
 GITHUB_REPO = "takwerx/infra-TAK"
 
 # --- AGPL section 13: offer the Corresponding Source to network users ---------
@@ -14386,7 +14386,7 @@ def guarddog_page():
         {'id': 'simulator', 'name': 'TAK Simulator', 'monitored': modules.get('simulator', {}).get('installed'), 'monitors': [{'name': 'Container', 'id': 'simulator_ctr', 'interval': '1 min', 'desc': 'Checks the tak-simulator container is running (liveness only). A scenario that is not running is normal and never alerts.'}]},
         {'id': 'nodered', 'name': 'Node-RED', 'monitored': modules.get('nodered', {}).get('installed'), 'monitors': [{'name': 'Container / HTTP', 'id': 'nodered_http', 'interval': '1 min', 'desc': 'Checks Node-RED HTTP (1880). Alert and restart after 3 failures. 15 min boot skip + cooldown to avoid restart loops.'}]},
         {'id': 'cloudtak', 'name': 'CloudTAK', 'monitored': modules.get('cloudtak', {}).get('installed'), 'monitors': [{'name': 'Container', 'id': 'cloudtak_ctr', 'interval': '1 min', 'desc': 'Checks CloudTAK container. Alert and restart after 3 failures. 15 min boot skip + cooldown to avoid restart loops.'}]},
-        {'id': 'updates', 'name': 'Updates', 'monitored': gd.get('installed'), 'monitors': [{'name': 'Update check', 'id': 'updates_check', 'interval': '6 h', 'desc': 'Checks for newer versions of infra-TAK, Authentik, MediaMTX, CloudTAK, and TAK Portal (same sources as the console update icons). Sends one email when any update is available (or when the set of available updates changes). Uses same alert email as other monitors. If this monitor is red or missing, click Update Guard Dog above to reinstall/update timers and scripts.'}]},
+        {'id': 'updates', 'name': 'Updates', 'monitored': gd.get('installed'), 'monitors': [{'name': 'Update check', 'id': 'updates_check', 'interval': '6 h', 'desc': 'Checks for newer versions of infra-TAK, Authentik, MediaMTX, CloudTAK, and TAK Portal (same sources as the console update icons). Sends one email when any update is available (or when the set of available updates changes). Uses same alert email as other monitors. Runs inside the console process, so if this monitor is red, restart the console (Console \u2192 Restart) rather than reinstalling Guard Dog.'}]},
     ])
     # v10.1.0 Leg 7: relay (connectivity anchor) health — only shown once a relay is
     # configured. When up, the relay IS the box's ingress; a stale tunnel = clients
@@ -20072,8 +20072,17 @@ def _monitor_health_check(monitor_id):
             r = subprocess.run(_sudo_wrap(['docker', 'ps', '--filter', 'name=cloudtak-api', '--format', '{{.Status}}']), capture_output=True, text=True, timeout=5)
             return bool(r.stdout and 'Up' in r.stdout)
         if monitor_id == 'updates_check':
-            r = subprocess.run(_sudo_wrap(['systemctl', 'is-enabled', 'takupdatesguard.timer']), capture_output=True, text=True, timeout=3)
-            return r.returncode == 0 and (r.stdout or '').strip() == 'enabled'
+            # v10.1.69 W5: was `systemctl is-enabled takupdatesguard.timer`. That timer ran
+            # tak-updates-watch.sh, a SECOND update-notification path that mailed the same
+            # pending updates as _update_notify_loop() on its own 6h cycle — each deduping
+            # only against itself, so customers got two emails per update set (field report,
+            # Charles Laird/NC 2026-09-12). The timer is retired; check the liveness of the
+            # thread that actually sends the mail now, so this monitor still means something.
+            try:
+                return any(t.name == 'update-notify' and t.is_alive()
+                           for t in threading.enumerate())
+            except Exception:
+                return None
         # Federation Hub monitors (all remote via SSH)
         if monitor_id.startswith('fedhub_'):
             settings = load_settings()
@@ -20630,30 +20639,14 @@ def guarddog_update():
     try:
         _auto_update_guarddog()
         # Ensure update-check units exist and are enabled.
-        # Older installs may have scripts but miss takupdatesguard.timer, which keeps Updates monitor red.
-        service_path = '/etc/systemd/system/takupdatesguard.service'
-        timer_path = '/etc/systemd/system/takupdatesguard.timer'
-        _updates_home = os.path.expanduser('~')
-        service_content = (
-            '[Unit]\n'
-            'Description=Guard Dog Updates Check (infra-TAK, Authentik, MediaMTX, CloudTAK)\n\n'
-            '[Service]\n'
-            'Type=oneshot\n'
-            f'Environment=HOME={_updates_home}\n'
-            'ExecStart=/opt/tak-guarddog/tak-updates-watch.sh\n'
-        )
-        timer_content = (
-            '[Unit]\n'
-            'Description=Check for updates every 6 hours\n\n'
-            '[Timer]\n'
-            'OnBootSec=30min\n'
-            'OnUnitActiveSec=6h\n'
-            'Unit=takupdatesguard.service\n\n'
-            '[Install]\n'
-            'WantedBy=timers.target\n'
-        )
-        _write_priv(service_path, service_content)
-        _write_priv(timer_path, timer_content)
+        # v10.1.69 W5: this block used to WRITE takupdatesguard.service/.timer. It now
+        # removes them — see _startup_retire_updates_timer(), which is the primary path
+        # (startup, so it rides the console update). Called here too so a Guard Dog deploy
+        # cannot silently reinstate what startup removed.
+        try:
+            _startup_retire_updates_timer()
+        except Exception as _rt_err:
+            print(f'[guarddog] retire updates timer failed (non-fatal): {_rt_err}', flush=True)
         # Auto-vacuum timer (daily 3am) — install if script exists but timer doesn't
         av_script = '/opt/tak-guarddog/tak-auto-vacuum.sh'
         av_svc_path = '/etc/systemd/system/takautovacuum.service'
@@ -20725,7 +20718,7 @@ def guarddog_update():
             _write_priv(_ak_tl_svc_path, '[Unit]\nDescription=Guard Dog Authentik Task Log Purge\n\n[Service]\nType=oneshot\nExecStart=/opt/tak-guarddog/tak-authentik-tasklog-purge.sh\n')
             _write_priv(_ak_tl_tmr_path, '[Unit]\nDescription=Purge Authentik task logs weekly (Sunday 03:00)\n\n[Timer]\nOnCalendar=Sun *-*-* 03:00:00\nPersistent=true\nUnit=takauthentiktasklogpurge.service\n\n[Install]\nWantedBy=timers.target\n')
         subprocess.run(_sudo_wrap(['systemctl', 'daemon-reload']), capture_output=True, timeout=10)
-        new_timers = ['takupdatesguard.timer']
+        new_timers = []   # v10.1.69 W5: takupdatesguard.timer retired (duplicate emails)
         if os.path.isfile(av_tmr_path):
             new_timers.append('takautovacuum.timer')
         if os.path.isfile(cotdb_tmr_path):
@@ -21020,6 +21013,41 @@ def _update_notify_check_once():
     if (emailed or not new_items) and new_state != state:
         _update_notify_state_save(new_state)
     return {'pending': pending, 'emailed': emailed}
+
+
+def _startup_retire_updates_timer():
+    """v10.1.69 W5: remove the legacy takupdatesguard timer/service.
+
+    It ran tak-updates-watch.sh, a SECOND update-notification path that mailed the same
+    pending updates as _update_notify_loop() on its own 6 h cycle. Each deduped only
+    against itself, so neither could see the other's mail and customers got two emails
+    per update set (field report, Charles Laird/NC 2026-09-12 — two subjects 75 min apart
+    on two 6 h cycles).
+
+    Runs at STARTUP, not from the Guard Dog deploy route: fixes ride the console update
+    ([[feedback-console-path-delivery]]). Idempotent — silent no-op once the units are gone."""
+    service_path = '/etc/systemd/system/takupdatesguard.service'
+    timer_path = '/etc/systemd/system/takupdatesguard.timer'
+    if not (os.path.exists(service_path) or os.path.exists(timer_path)):
+        return False
+    # mode='seq': disable/stop legitimately fail when a unit is already masked or stopped,
+    # and that must not stop the rm — this has to converge on every box.
+    _run_priv_chain([
+        ['systemctl', 'disable', '--now', 'takupdatesguard.timer'],
+        ['systemctl', 'stop', 'takupdatesguard.service'],
+        ['rm', '-f', timer_path],
+        ['rm', '-f', service_path],
+        ['systemctl', 'daemon-reload'],
+    ], 'seq', timeout=30)
+    # Verify rather than assume — a removal that silently did nothing is exactly how this
+    # customer got two emails a day for months.
+    if os.path.exists(service_path) or os.path.exists(timer_path):
+        print('Startup migration: WARNING legacy takupdatesguard units still present after '
+              'removal attempt', flush=True)
+        return False
+    print('Startup migration: removed legacy takupdatesguard timer/service '
+          '(duplicate update emails - v10.1.69 W5)', flush=True)
+    return True
 
 
 def _update_notify_loop():
@@ -21910,11 +21938,11 @@ def run_guarddog_deploy(alert_email):
         # boot, 15 minutes in, and releases whether or not a gate is present.
         # v10.1.46 (W2) — session visibility watcher: read-only, alerts only.
         units.extend(_CLIENT_GATE_UNITS)
-        _updates_home = os.path.expanduser('~')
-        units.extend([
-            ('takupdatesguard.service', f'[Unit]\nDescription=Guard Dog Updates Check (infra-TAK, Authentik, MediaMTX, CloudTAK)\n\n[Service]\nType=oneshot\nEnvironment=HOME={_updates_home}\nExecStart=/opt/tak-guarddog/tak-updates-watch.sh\n'),
-            ('takupdatesguard.timer', '[Unit]\nDescription=Check for updates every 6 hours\n\n[Timer]\nOnBootSec=30min\nOnUnitActiveSec=6h\nUnit=takupdatesguard.service\n\n[Install]\nWantedBy=timers.target\n'),
-        ])
+        # v10.1.69 W5: takupdatesguard.service/.timer are NOT written any more. They ran
+        # tak-updates-watch.sh, which mailed the same pending updates as the in-process
+        # _update_notify_loop() notifier on a separate 6h cycle — two emails per update set.
+        # The Python notifier wins: per-identity dedup, a console toggle, and it names each
+        # item installed -> target. Existing units are removed by the migration above.
         for name, content in units:
             path = os.path.join('/etc/systemd/system', name)
             _write_priv(path, content)
@@ -22029,7 +22057,7 @@ def run_guarddog_deploy(alert_email):
             timers.append('taktakportalguard.timer')
         if 'tak-fedhub-watch.sh' in script_files:
             timers.append('takfedhubguard.timer')
-        timers.append('takupdatesguard.timer')
+        # v10.1.69 W5: takupdatesguard.timer deliberately NOT enabled — retired.
         # v10.1.46: the gate backstop and the session watcher. A timer written but
         # not enabled is the exact bug called out above for takfeedsourceguard —
         # and for the gate backstop it would be the difference between a released
@@ -76761,6 +76789,11 @@ def _startup_migrations():
         # v10.1.50: converge grace_period FIRST. _startup_caddy_selfheal() returns early
         # on a Caddyfile that parses — which is nearly every box — so hanging this off it
         # would have healed almost nothing.
+        try:
+            _startup_retire_updates_timer()
+        except Exception as _rt_err:
+            print(f"Startup migration: retire updates timer error (non-fatal): {_rt_err}",
+                  flush=True)
         try:
             _startup_caddy_grace_period_converge()
         except Exception as _gp_err:
