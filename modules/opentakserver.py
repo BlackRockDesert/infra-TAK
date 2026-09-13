@@ -577,6 +577,7 @@ def uninstall(ctx, job, params):
         steps.append('Containers stopped and removed')
     s = ctx['load_settings']()
     s['ots_enabled'] = False
+    s.pop('ots_version', None)
     ctx['save_settings'](s)
     ctx['generate_caddyfile'](s)
     ctx['_caddy_reload']()
