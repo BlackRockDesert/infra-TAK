@@ -108,7 +108,7 @@ services:
       - OTS_CA_CITY={ca_city}
       - OTS_CA_ORGANIZATION={ca_org}
       - OTS_CA_ORGANIZATIONAL_UNIT={ca_ou}
-      - OTS_SSL_VERIFICATION_MODE=ssl.CERT_REQUIRED
+      - OTS_SSL_VERIFICATION_MODE=2
       - OTS_ENABLE_LDAP={ldap_enabled}
       - OTS_LDAP_ADMIN_GROUP={ldap_admin_group}
       - LDAP_HOST={ldap_host}
