@@ -80,7 +80,7 @@ services:
         max-file: "3"
 
   postgres:
-    image: postgres:16-alpine
+    image: postgis/postgis:16-3.4
     container_name: {ots_pg_container}
     environment:
       POSTGRES_USER: ots
