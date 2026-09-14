@@ -436,6 +436,9 @@ def deploy(ctx, job, params):
         plog('━━━ Step 3/8: Writing Configuration ━━━')
         os.makedirs(os.path.join(ots_dir_, 'data'), exist_ok=True)
         os.makedirs(os.path.join(ots_dir_, 'data', 'ca'), exist_ok=True)
+        os.makedirs(os.path.join(ots_dir_, 'data', 'uploads'), exist_ok=True)
+        # chmod data/ so the container process (non-root UID) can write to the volume
+        os.chmod(os.path.join(ots_dir_, 'data'), 0o777)
 
         # Generate secrets
         secret_key = s.get('ots_secret_key') or _sec.token_hex(32)
