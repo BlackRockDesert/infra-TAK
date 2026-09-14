@@ -29189,16 +29189,24 @@ def generate_caddyfile(settings=None):
     ots_mod = modules.get('ots', {})
     if ots_mod.get('installed'):
         ots_host = sd.get('ots') or _get_service_domain(settings, 'ots')
-        lines.append(f"# OpenTAKServer — Python-based TAK Server")
+        ots_api_host = f"ots-api.{settings.get('fqdn', '')}" if settings.get('fqdn') else ''
+        # OTS Web UI
+        lines.append(f"# OpenTAKServer Web UI")
         lines.append(f"{ots_host} {{")
-        # OTS API on port 8081 — Caddy handles SSL termination
-        lines.append(f"    reverse_proxy 127.0.0.1:8081 {{")
-        lines.append(f"        header_up X-Forwarded-Proto https")
-        lines.append(f"        header_up X-Ssl-Cert {{http.request.remote.host}}")
-        lines.append(f"    }}")
+        lines.append(f"    reverse_proxy 127.0.0.1:8082")
         lines.append(f"}}")
         lines.append("")
         _emit_alias_redirect(_get_service_alias(settings, 'ots'), ots_host)
+        # OTS API
+        if ots_api_host:
+            lines.append(f"# OpenTAKServer API")
+            lines.append(f"{ots_api_host} {{")
+            lines.append(f"    reverse_proxy 127.0.0.1:8081 {{")
+            lines.append(f"        header_up X-Forwarded-Proto https")
+            lines.append(f"        header_up X-Ssl-Cert {{http.request.remote.host}}")
+            lines.append(f"    }}")
+            lines.append(f"}}")
+            lines.append("")
 
     nb_mod = modules.get('netbird', {})
     if nb_mod.get('installed'):

@@ -48,6 +48,7 @@ OTS_SHA = "67903c2"  # pinned commit SHA — update when bumping TAG
 OTS_CONTAINER = "opentakserver"
 OTS_RABBIT_CONTAINER = "ots-rabbitmq"
 OTS_PG_CONTAINER = "ots-postgres"
+OTS_WEBUI_CONTAINER = "ots-webui"
 
 # ── Docker Compose ───────────────────────────────────────────────────────────
 
@@ -165,6 +166,22 @@ services:
       options:
         max-size: "10m"
         max-file: "5"
+
+  ots-webui:
+    image: ghcr.io/milsimdk/ots-ui-docker-image:latest
+    container_name: {ots_webui_container}
+    hostname: opentakserver-webui
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8082:80"
+    depends_on:
+      opentakserver:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   rabbitmq_data:
@@ -519,6 +536,7 @@ def deploy(ctx, job, params):
             ots_container=OTS_CONTAINER,
             rabbit_container=OTS_RABBIT_CONTAINER,
             ots_pg_container=OTS_PG_CONTAINER,
+            ots_webui_container=OTS_WEBUI_CONTAINER,
             secret_key=secret_key,
             password_salt=password_salt,
             rabbit_password=rabbit_password,
