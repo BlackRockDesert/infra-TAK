@@ -469,7 +469,7 @@ def deploy(ctx, job, params):
 
         # Generate secrets
         secret_key = s.get('ots_secret_key') or _sec.token_hex(32)
-        password_salt = s.get('ots_password_salt') or str(_sec.randbits(128))
+        password_salt = s.get('ots_password_salt') or 'ots_' + str(_sec.randbits(128))
         ca_password = s.get('ots_ca_password') or _sec.token_hex(16)
         rabbit_password = s.get('ots_rabbit_password') or _sec.token_hex(16)
         pg_password = s.get('ots_pg_password') or _sec.token_hex(16)
