@@ -88,10 +88,9 @@ services:
       POSTGRES_DB: ots
     volumes:
       - ots_pg_data:/var/lib/postgresql/data
-      - {ots_dir}/data/init-postgis.sql:/docker-entrypoint-initdb.d/init-postgis.sql:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ots"]
+      test: ["CMD-SHELL", "pg_isready -U ots && psql -U ots -d ots -c 'CREATE EXTENSION IF NOT EXISTS postgis;'"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -465,10 +464,6 @@ def deploy(ctx, job, params):
         os.makedirs(os.path.join(ots_dir_, 'data', 'uploads'), exist_ok=True)
         # chmod data/ so the container process (non-root UID) can write to the volume
         os.chmod(os.path.join(ots_dir_, 'data'), 0o777)
-
-        # PostGIS init script — runs once on first postgres startup
-        ctx['_write_priv'](os.path.join(ots_dir_, 'data', 'init-postgis.sql'),
-                           'CREATE EXTENSION IF NOT EXISTS postgis;\n')
 
         # Generate secrets
         secret_key = s.get('ots_secret_key') or _sec.token_hex(32)
