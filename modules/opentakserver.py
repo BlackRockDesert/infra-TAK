@@ -142,7 +142,7 @@ services:
       - LDAP_GROUP_DN={ldap_group_dn}
       - LDAP_BIND_USER_DN={ldap_bind_user_dn}
       - LDAP_BIND_USER_PASSWORD={ldap_bind_password}
-      - SQLALCHEMY_DATABASE_URI=postgresql://ots:{pg_password}@postgres:5432/ots
+      - SQLALCHEMY_DATABASE_URI=postgresql+psycopg://ots:{pg_password}@postgres:5432/ots
       - PYTHONUNBUFFERED=1
     volumes:
       - {ots_dir}/data:/app/data
