@@ -103,9 +103,7 @@ services:
         max-file: "3"
 
   opentakserver:
-    build:
-      context: {ots_dir}
-      dockerfile: Dockerfile
+    image: ghcr.io/milsimdk/ots-docker-image:latest
     container_name: {ots_container}
     depends_on:
       rabbitmq:
@@ -113,51 +111,51 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      - OTS_DATA_FOLDER=/app/data
-      - OTS_LISTENER_PORT=8081
-      - OTS_TCP_STREAMING_PORT=8088
-      - OTS_SSL_STREAMING_PORT=8089
-      - OTS_MARTI_HTTP_PORT=8080
-      - OTS_MARTI_HTTPS_PORT=8443
-      - OTS_CERTIFICATE_ENROLLMENT_PORT=8446
-      - OTS_RABBITMQ_SERVER_ADDRESS=rabbitmq
-      - OTS_RABBITMQ_TTL=86400000
-      - OTS_COT_PARSER_PROCESSES=1
-      - SECRET_KEY={secret_key}
-      - SECURITY_PASSWORD_SALT={password_salt}
-      - OTS_CA_NAME={ca_name}
-      - OTS_CA_FOLDER=/app/data/ca
-      - OTS_CA_PASSWORD={ca_password}
-      - OTS_CA_EXPIRATION_TIME=3650
-      - OTS_CA_COUNTRY={ca_country}
-      - OTS_CA_STATE={ca_state}
-      - OTS_CA_CITY={ca_city}
-      - OTS_CA_ORGANIZATION={ca_org}
-      - OTS_CA_ORGANIZATIONAL_UNIT={ca_ou}
-      - OTS_SSL_VERIFICATION_MODE=2
-      - OTS_ENABLE_LDAP={ldap_enabled}
-      - OTS_LDAP_ADMIN_GROUP={ldap_admin_group}
-      - LDAP_HOST={ldap_host}
-      - LDAP_BASE_DN={ldap_base_dn}
-      - LDAP_USER_DN={ldap_user_dn}
-      - LDAP_GROUP_DN={ldap_group_dn}
-      - LDAP_BIND_USER_DN={ldap_bind_user_dn}
-      - LDAP_BIND_USER_PASSWORD={ldap_bind_password}
-      - SQLALCHEMY_DATABASE_URI=postgresql+psycopg://ots:{pg_password}@postgres:5432/ots
+      - DOCKER_OTS_DATA_FOLDER=/app/ots
+      - DOCKER_OTS_LISTENER_PORT=8081
+      - DOCKER_OTS_TCP_STREAMING_PORT=8088
+      - DOCKER_OTS_SSL_STREAMING_PORT=8089
+      - DOCKER_OTS_MARTI_HTTP_PORT=8080
+      - DOCKER_OTS_MARTI_HTTPS_PORT=8443
+      - DOCKER_OTS_CERTIFICATE_ENROLLMENT_PORT=8446
+      - DOCKER_OTS_RABBITMQ_SERVER_ADDRESS=rabbitmq
+      - DOCKER_OTS_RABBITMQ_TTL=86400000
+      - DOCKER_OTS_COT_PARSER_PROCESSES=1
+      - DOCKER_SECRET_KEY={secret_key}
+      - DOCKER_SECURITY_PASSWORD_SALT={password_salt}
+      - DOCKER_OTS_CA_NAME={ca_name}
+      - DOCKER_OTS_CA_FOLDER=/app/ots/ca
+      - DOCKER_OTS_CA_PASSWORD={ca_password}
+      - DOCKER_OTS_CA_EXPIRATION_TIME=3650
+      - DOCKER_OTS_CA_COUNTRY={ca_country}
+      - DOCKER_OTS_CA_STATE={ca_state}
+      - DOCKER_OTS_CA_CITY={ca_city}
+      - DOCKER_OTS_CA_ORGANIZATION={ca_org}
+      - DOCKER_OTS_CA_ORGANIZATIONAL_UNIT={ca_ou}
+      - DOCKER_OTS_SSL_VERIFICATION_MODE=2
+      - DOCKER_OTS_ENABLE_LDAP={ldap_enabled}
+      - DOCKER_OTS_LDAP_ADMIN_GROUP={ldap_admin_group}
+      - DOCKER_LDAP_HOST={ldap_host}
+      - DOCKER_LDAP_BASE_DN={ldap_base_dn}
+      - DOCKER_LDAP_USER_DN={ldap_user_dn}
+      - DOCKER_LDAP_GROUP_DN={ldap_group_dn}
+      - DOCKER_LDAP_BIND_USER_DN={ldap_bind_user_dn}
+      - DOCKER_LDAP_BIND_USER_PASSWORD={ldap_bind_password}
+      - DOCKER_SQLALCHEMY_DATABASE_URI=postgresql+psycopg://ots:{pg_password}@postgres:5432/ots
       - PYTHONUNBUFFERED=1
     volumes:
-      - {ots_dir}/data:/app/data
+      - {ots_dir}/data:/app/ots
     ports:
       - "127.0.0.1:8081:8081"
       - "0.0.0.0:8088:8088"
       - "0.0.0.0:8089:8089"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/api/ots/health"]
-      interval: 30s
+      test: ["CMD", "python3", "/app/healthcheck.py"]
+      interval: 60s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 30s
     logging:
       driver: json-file
       options:
