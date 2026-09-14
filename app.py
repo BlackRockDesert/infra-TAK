@@ -29269,21 +29269,6 @@ def generate_caddyfile(settings=None):
         lines.append(f"}}")
         lines.append("")
 
-    # OpenTAKServer — reverse proxy to OTS web UI (HTTPS on loopback)
-    ots_mod = modules.get('ots', {})
-    if ots_mod.get('installed'):
-        ots_host = sd['ots']
-        lines.append(f"# OpenTAKServer Web UI")
-        lines.append(f"{ots_host} {{")
-        lines.append(f"    reverse_proxy https://127.0.0.1:8443 {{")
-        lines.append(f"        transport http {{")
-        lines.append(f"            tls")
-        lines.append(f"            tls_insecure_skip_verify")
-        lines.append(f"        }}")
-        lines.append(f"    }}")
-        lines.append(f"}}")
-        lines.append("")
-
     # v0.9.51 — Custom certificate (bring-your-own-cert) mode. When ssl_mode == 'custom'
     # the operator has uploaded a full-chain PEM + key on the Caddy page; Caddy must serve
     # THAT cert (no ACME) on every site. We inject a `tls <cert> <key>` directive into each
