@@ -47,6 +47,7 @@ OTS_SHA = "67903c2"  # pinned commit SHA — update when bumping TAG
 # Docker container names
 OTS_CONTAINER = "opentakserver"
 OTS_RABBIT_CONTAINER = "ots-rabbitmq"
+OTS_PG_CONTAINER = "ots-postgres"
 
 # ── Docker Compose ───────────────────────────────────────────────────────────
 
@@ -78,6 +79,28 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: {ots_pg_container}
+    environment:
+      POSTGRES_USER: ots
+      POSTGRES_PASSWORD: {pg_password}
+      POSTGRES_DB: ots
+    volumes:
+      - ots_pg_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ots"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   opentakserver:
     build:
       context: {ots_dir}
@@ -85,6 +108,8 @@ services:
     container_name: {ots_container}
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     environment:
       - OTS_DATA_FOLDER=/app/data
@@ -117,6 +142,7 @@ services:
       - LDAP_GROUP_DN={ldap_group_dn}
       - LDAP_BIND_USER_DN={ldap_bind_user_dn}
       - LDAP_BIND_USER_PASSWORD={ldap_bind_password}
+      - SQLALCHEMY_DATABASE_URI=postgresql://ots:{pg_password}@postgres:5432/ots
       - PYTHONUNBUFFERED=1
     volumes:
       - {ots_dir}/data:/app/data
@@ -139,6 +165,7 @@ services:
 
 volumes:
   rabbitmq_data:
+  ots_pg_data:
 '''
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -445,6 +472,7 @@ def deploy(ctx, job, params):
         password_salt = s.get('ots_password_salt') or str(_sec.randbits(128))
         ca_password = s.get('ots_ca_password') or _sec.token_hex(16)
         rabbit_password = s.get('ots_rabbit_password') or _sec.token_hex(16)
+        pg_password = s.get('ots_pg_password') or _sec.token_hex(16)
 
         # CA fields from params or settings
         ca_country = params.get('ca_country') or s.get('ots_ca_country', 'WW')
@@ -481,9 +509,11 @@ def deploy(ctx, job, params):
             ots_dir=ots_dir_,
             ots_container=OTS_CONTAINER,
             rabbit_container=OTS_RABBIT_CONTAINER,
+            ots_pg_container=OTS_PG_CONTAINER,
             secret_key=secret_key,
             password_salt=password_salt,
             rabbit_password=rabbit_password,
+            pg_password=pg_password,
             ca_name=ca_name,
             ca_password=ca_password,
             ca_country=ca_country,
@@ -556,6 +586,7 @@ def deploy(ctx, job, params):
         s['ots_password_salt'] = password_salt
         s['ots_ca_password'] = ca_password
         s['ots_rabbit_password'] = rabbit_password
+        s['ots_pg_password'] = pg_password
         s['ots_ca_country'] = ca_country
         s['ots_ca_state'] = ca_state
         s['ots_ca_city'] = ca_city
