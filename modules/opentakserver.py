@@ -492,17 +492,21 @@ def deploy(ctx, job, params):
         ldap_bind_password = ''
         ldap_admin_group = 'ots_admin'
 
-        # Read LDAP creds from Authentik if available
-        ak_token = (ctx['_get_authentik_env_value'](s, 'AUTHENTIK_TOKEN') or
-                    ctx['_get_authentik_env_value'](s, 'AUTHENTIK_BOOTSTRAP_TOKEN'))
-        if ak_token and fqdn:
-            try:
-                ldap_bind_password = (ctx['_get_authentik_env_value'](s, 'AUTHENTIK_BOOTSTRAP_LDAPSERVICE_PASSWORD') or '')
-                if ldap_bind_password:
-                    ldap_enabled = 'true'
-                    plog('  ✓ Authentik LDAP credentials loaded')
-            except Exception:
-                plog('  ⚠ Could not read Authentik LDAP credentials — LDAP disabled')
+        # Read LDAP creds from Authentik if LDAP is enabled
+        if ldap_enabled == 'true':
+            ak_token = (ctx['_get_authentik_env_value'](s, 'AUTHENTIK_TOKEN') or
+                        ctx['_get_authentik_env_value'](s, 'AUTHENTIK_BOOTSTRAP_TOKEN'))
+            if ak_token and fqdn:
+                try:
+                    ldap_bind_password = (ctx['_get_authentik_env_value'](s, 'AUTHENTIK_BOOTSTRAP_LDAPSERVICE_PASSWORD') or '')
+                    if ldap_bind_password:
+                        plog('  ✓ Authentik LDAP credentials loaded')
+                    else:
+                        plog('  ⚠ Authentik token found but no LDAP password — LDAP may not work')
+                except Exception:
+                    plog('  ⚠ Could not read Authentik LDAP credentials — LDAP may not work')
+            else:
+                plog('  ⚠ Authentik not configured — LDAP enabled but credentials missing')
 
         # Write docker-compose.yml
         compose_content = OTS_DOCKER_COMPOSE.format(
