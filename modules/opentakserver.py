@@ -174,6 +174,8 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:8082:80"
+    volumes:
+      - {ots_dir}/data/nginx-webui.conf:/etc/nginx/templates/default.conf.template:ro
     depends_on:
       opentakserver:
         condition: service_healthy
@@ -486,6 +488,36 @@ def deploy(ctx, job, params):
         os.makedirs(os.path.join(ots_dir_, 'data', 'uploads'), exist_ok=True)
         # chmod data/ so the container process (non-root UID) can write to the volume
         os.chmod(os.path.join(ots_dir_, 'data'), 0o777)
+
+        # Nginx config for web UI — proxies /api/* and /oauth/* to OTS API
+        nginx_conf = '''server_tokens off;
+server {
+    listen       80;
+    server_name  localhost;
+    include /etc/nginx/mime.types;
+    location /api/ {
+        proxy_pass http://opentakserver:8081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location /oauth/ {
+        proxy_pass http://opentakserver:8081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location / {
+        root   /usr/share/nginx/html;
+        index  index.html index.htm;
+        try_files $uri /index.html;
+        client_max_body_size 512M;
+    }
+}
+'''
+        ctx['_write_priv'](os.path.join(ots_dir_, 'data', 'nginx-webui.conf'), nginx_conf)
 
         # Generate secrets
         secret_key = s.get('ots_secret_key') or _sec.token_hex(32)
