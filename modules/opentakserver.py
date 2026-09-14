@@ -148,6 +148,9 @@ services:
       - {ots_dir}/data:/app/ots
     ports:
       - "127.0.0.1:8081:8081"
+      - "127.0.0.1:8080:8080"
+      - "0.0.0.0:8443:8443"
+      - "0.0.0.0:8446:8446"
       - "0.0.0.0:8088:8088"
       - "0.0.0.0:8089:8089"
     restart: unless-stopped
@@ -570,10 +573,9 @@ def deploy(ctx, job, params):
         # Step 6: Firewall
         plog('')
         plog('━━━ Step 6/8: Configuring Firewall ━━━')
-        for port_proto in ['8088/tcp', '8089/tcp']:
-            ok, msg = ctx['_fw_allow'](8088 if '8088' in port_proto else 8089, 'tcp')
-            plog(f'  {"✓" if ok else "⚠"} {port_proto}: {msg}')
-        # Admin ports (8080, 8443, 8446) are Caddy-loopback only
+        for port in [8088, 8089, 8443, 8446]:
+            ok, msg = ctx['_fw_allow'](port, 'tcp')
+            plog(f'  {"✓" if ok else "⚠"} {port}/tcp: {msg}')
 
         # Step 7: Caddy
         plog('')
