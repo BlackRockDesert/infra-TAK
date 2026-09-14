@@ -186,10 +186,25 @@ def get_latest_release_tag(use_cache=True):
 
 
 def get_version_info(ctx):
-    """Return {version, update_available, latest} for OTS."""
+    """Return {version, update_available, latest} for OTS.
+
+    Clears stale ots_version if the container is not running, so the
+    template's checkStatus() never shows a phantom 'Running' state."""
     info = {'version': '', 'update_available': False, 'latest': None}
     s = ctx['load_settings']()
-    info['version'] = s.get('ots_version', '')
+    ver = s.get('ots_version', '')
+    if ver:
+        try:
+            r = ctx['probe_run'](
+                ['docker', 'inspect', '--format', '{{.State.Running}}', OTS_CONTAINER],
+                text=True, timeout=3)
+            if (r.stdout or '').strip() != 'true':
+                ver = ''
+                s.pop('ots_version', None)
+                ctx['save_settings'](s)
+        except Exception:
+            ver = ''
+    info['version'] = ver
     latest = get_latest_release_tag()
     if latest:
         info['latest'] = latest
