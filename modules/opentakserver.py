@@ -149,7 +149,7 @@ services:
     ports:
       - "127.0.0.1:8081:8081"
       - "127.0.0.1:8080:8080"
-      - "0.0.0.0:8443:8443"
+      - "0.0.0.0:443:8443"
       - "0.0.0.0:8446:8446"
       - "0.0.0.0:8088:8088"
       - "0.0.0.0:8089:8089"
@@ -573,7 +573,7 @@ def deploy(ctx, job, params):
         # Step 6: Firewall
         plog('')
         plog('━━━ Step 6/8: Configuring Firewall ━━━')
-        for port in [8088, 8089, 8443, 8446]:
+        for port in [8088, 8089, 443, 8446]:
             ok, msg = ctx['_fw_allow'](port, 'tcp')
             plog(f'  {"✓" if ok else "⚠"} {port}/tcp: {msg}')
 
