@@ -4,7 +4,7 @@ Team Awareness Kit Infrastructure Management Platform.
 
 One clone. One password. One URL. Manage everything from your browser.
 
-**Current release: [v10.1.62-alpha](https://github.com/takwerx/infra-TAK/releases/tag/v10.1.62-alpha)**
+**Current release: [v10.1.70-alpha](https://github.com/takwerx/infra-TAK/releases/tag/v10.1.70-alpha)**
 
 Older releases on the [GitHub Releases tab](https://github.com/takwerx/infra-TAK/releases) — each tag carries its full release notes.
 
@@ -421,6 +421,124 @@ overrides, so treat that list as authoritative over this table.
 ---
 
 ## Changelog
+
+### v10.1.70-alpha — 2026-09-13 — The safety nets stop hurting the operator
+
+**Headline: intrusion protection could permanently lock you out of the console you would use to fix it, and the disk-health alert spammed hardest exactly when the disk was genuinely struggling. Both are fixed, along with two quieter data-safety bugs.** Release: https://github.com/takwerx/infra-TAK/releases/tag/v10.1.70-alpha
+
+**Locked out of your own server by your own firewall.** The Repeat Offender jail bans an address on **every port** — including `:5001`, the console. It did so **permanently**. Three failed SSH logins in a day is ordinary life in an office behind one shared IP where a few people mistype a password; it does not mean an attacker. If that address was yours and you could not reach the box from somewhere else, there was no way back in at all.
+
+Three changes. Your own address is now added to the never-ban list **from the console, in one click** — the page has warned for several releases that you were not protected, and now there is a button next to the warning that fixes it. The ban is no longer permanent: repeat offenders are blocked for **7 days**. And the card says plainly what a ban costs you — every port, including this console — instead of quietly implying it is SSH-only.
+
+One thing worth knowing if you have used the Whitelist box on the SSH card: that field only covers the SSH jail. It never reached the Repeat Offender jail, so an address you whitelisted there could still be banned on every port. The one-click button writes to the server-wide list and reaches **every** jail, which is the difference.
+
+**The disk alert that got noisier the worse things got.** Guard Dog's Disk I/O Degradation email is meant to arrive at most once every six hours. In practice a server with an intermittently slow disk could get one every fifteen minutes. A single good reading reset the timer, so a disk flipping between degraded and fine re-alerted on every check — and intermittent slowness is exactly what noisy-neighbor contention on shared hosting looks like. The alert was quietest for a steadily bad disk and loudest for the case it exists to catch. The six-hour floor now holds.
+
+**Also in this release.** The map-data Configurator's Tablet Command and PulsePoint panels could overwrite your saved feed configurations with an older snapshot while reporting success — the same protection added for ArcGIS feeds last release now covers all three, and it will not restore anything that would lose configurations. And a Node-RED deploy no longer leaves the installation directory in a modified state.
+
+**Upgrading.** Update Now from the console. Existing permanent bans stay until you lift them from the fail2ban page; new bans use the 7-day duration.
+
+
+### v10.1.69-alpha — 2026-09-12 — A saved feed either runs or tells you why, and one update email instead of two
+
+**Headline: the map-data Configurator could save a feed that silently never ran, and every server has been sending two emails about the same pending updates. Both are fixed.** Release: https://github.com/takwerx/infra-TAK/releases/tag/v10.1.69-alpha
+
+**The feed that saved successfully and did nothing.** In the Vector → TAK Configurator, unchecking **Data Sync Mission** offered "broadcast-only / channel streaming". Choosing it produced a saved configuration that reported success, appeared in your saved list with a port number next to it — and never ran. No flow was created, nothing was streamed, and nothing anywhere said so. That mode was never actually implemented, so the checkbox was offering something the engine could not do. This was found and reported from the field, with a write-up thorough enough to turn it into a ten-minute diagnosis.
+
+Now a feed without a TAK Mission name is **refused at save time with the reason**, broadcast-only says plainly that it is not supported yet, and an older configuration saved in that state shows **"not running — no TAK Mission name"** on its card instead of a port that means nothing.
+
+**Two emails about the same updates.** Reported from the field: several update emails a day, arriving in pairs. Two separate update-notification systems were both shipping, each on a six-hour cycle, and each only checked whether *it* had already told you — so neither could see the other's email. The older one is retired; you now get one email per new update, as intended. The Guard Dog **Update check** monitor keeps working and turns green as before.
+
+**Also in this release.**
+
+- **Control how long map data stays valid on the device.** CoT stale time is now its own field, separate from the time window that filters which features are fetched. Previously the two were welded together, so a feed that updated slowly could have its markers expire between polls — ATAK keeps showing stale items, TAKAware drops them. Leave it blank for the previous behavior.
+- **See how big a feed is before you commit to it.** The Configurator now shows the feature count for each selected layer, updating as you change the filter, and asks for confirmation before saving a feed above 1,000 features. Nothing limited this before: a layer with tens of thousands of features would be pushed in full to everyone receiving the feed.
+- **Configurator saves are safer.** Creating a feed triggers an internal redeploy that could, in the wrong moment, clear the saved configurations held in memory. That path now checks whether anything was lost and restores it, and refuses to accept a backup that would leave you with fewer configurations than you had.
+
+**Upgrade:** applied automatically on update. The duplicate-email fix takes effect at the next console restart; the Configurator changes appear after the update finishes.
+
+### v10.1.68-alpha — 2026-09-12 — Protect the second machine, and stop monitoring that misleads you
+
+**Headline: on a two-server build the database machine was never given brute-force protection, and several alerts have been pointing at the wrong problem. Both are fixed.** Release: https://github.com/takwerx/infra-TAK/releases/tag/v10.1.68-alpha
+
+**The security gap.** Installing fail2ban from the Marketplace only ever protected the machine the console runs on. On a two-server build the database machine got nothing — an internet-facing SSH service with no brute-force protection from the day it was built, and nothing in the console said so. Worse, once the console machine was protected the installer reported "already installed", so there was no way to reach the database machine even if you knew to look.
+
+This was reported from the field, and testing it found the same hole on one of our own two-server systems: its database machine was taking **16,633 failed SSH attempts in 24 hours from 297 different addresses** with no protection at all. Applying the fix banned the first address within seconds.
+
+**What changes.**
+
+- **The database machine is protected too.** A new build protects both machines; an existing build gets a one-click fix for the database machine, and the console now shows that machine's protection status so an unprotected one is visible instead of discovered during an incident.
+- **An SSH outage is no longer reported as a database credential problem.** The credential check ran *through* SSH, so when SSH was unreachable it looked identical to a wrong password — and reported "credential drift" about a database that was perfectly healthy. It now recognises the difference and stays quiet, since unreachability is already reported separately and correctly.
+- **A failing certificate renewal now tells you.** Monitoring watched the certificate's expiry date and nothing else, so a renewal that had been failing for days stayed silent — the certificate was still valid — until a restart turned it into an outage. A failing renewal, and a missing keystore, are now reported as what they are: an outage that has not happened yet.
+- **Streaming fixes arrive on update.** Two fixes to the MediaMTX editor — GStreamer installation on hardened systems, and the Live Logs view showing "Connection lost" forever — previously only applied if you happened to click a repair button. They now apply automatically when the console updates.
+
+**Upgrading.** Update from the console as usual. If you run a two-server build, check the fail2ban page afterwards and apply the database-machine protection if it reports the machine unprotected.
+
+### v10.1.67-alpha — 2026-09-12 — A failing certificate renewal can no longer take TAK Server down
+
+**Headline: if you run TAK Server in a container with a Let's Encrypt certificate, this closes a fault that could stop TAK from starting at all — and repairs boxes it has already affected.** Release: https://github.com/takwerx/infra-TAK/releases/tag/v10.1.67-alpha
+
+**What was wrong.** The nightly certificate-renewal job deleted TAK's existing keystore *before* rebuilding it. If the rebuild then failed for any reason, the server was left with no keystore — and because TAK's configuration points one of its secure listeners at that file, **TAK Server would refuse to start at the next restart**. Nothing warned you in the meantime: the running server carried on using the copy already in memory, so the fault stayed invisible until something restarted, which could be days later.
+
+On hardened TAK images the rebuild failed every time, because the job assumed the wrong user account owned the certificate files.
+
+**What changes.**
+
+- **The renewal never destroys a working keystore again.** It builds the new one alongside the old and only swaps it in once the rebuild has succeeded. A failed renewal now leaves your server exactly as it was.
+- **The correct user is detected rather than assumed**, so renewals work on hardened images as well as standard ones.
+- **Boxes already affected repair themselves on update.** If your TAK Server is currently failing to start because its keystore is missing, updating rebuilds it and brings TAK back — no shell access required.
+- Boxes carrying the old renewal job have it corrected automatically at startup.
+
+**Upgrading.** Update from the console as usual. If TAK Server has been failing to start, the repair runs on its own during startup; give it a couple of minutes and check TAK again.
+
+### v10.1.66-alpha — 2026-09-12 — Fixes a regression in v10.1.65
+
+**Headline: if you took v10.1.65 and have MediaMTX installed, take this one too.** Release: https://github.com/takwerx/infra-TAK/releases/tag/v10.1.66-alpha
+
+**What happened.** v10.1.65 changed how the MediaMTX editor checks whether the infra-TAK privilege broker is available. The new check asked the broker a question it does not answer, so it always concluded "no broker" and fell back to `sudo` — which on a hardened box does not exist. The practical effect is that **Install GStreamer stops working on a hardened box**, which is the very thing v10.1.65 set out to fix.
+
+This only affects a box that took v10.1.65 **and** subsequently deployed or repaired MediaMTX. If you have not touched MediaMTX since updating, you were never exposed.
+
+**What changes.** The availability check now asks the broker something it permits and treats any reply as "broker present" — which is what the original code did, minus the log noise that started all this. This release also **repairs editors that v10.1.65 already modified**; you do not need to reinstall anything, just update and re-run the MediaMTX repair action if Install GStreamer was failing.
+
+**Our mistake, plainly.** The broker operation used in v10.1.65 was verified by reading the broker's source rather than by calling it. It exists in the code and is permitted — it simply is not served on the channel the editor uses. Testing confirmed the change had been applied, not that it worked. That gap is what this release closes.
+
+### v10.1.65-alpha — 2026-09-11 — CloudTAK updates unblocked, and GStreamer installs on a hardened box
+
+**Headline: if you run the CloudTAK Dispatcher plugin, CloudTAK updates were failing — that is fixed, and a failed build now tells you why instead of just an exit code.** Release: https://github.com/takwerx/infra-TAK/releases/tag/v10.1.65-alpha
+
+**Why it matters.** CloudTAK 13.85.0 changed a type in its plugin interface: a user who has been provisioned but has never logged in now holds no certificate. Our Dispatcher/TAK-CAD server routes assumed one always existed, so the CloudTAK image would not build and every update stopped at the rebuild step. It failed safely — your running CloudTAK kept serving throughout — but no update could complete, and the reason was buried two hundred lines deep in build output.
+
+**What changes.**
+
+- **CloudTAK updates complete again** on any box with the Dispatcher or TAK-CAD plugin installed. The fix travels with the plugin, so it arrives the next time the plugin is installed or updated.
+- **A failed CloudTAK build now names its own cause.** Instead of `Build/restart failed with exit code 1`, the log ends with a short "Likely cause" summary — which plugin broke the build, what to do about it, and a reminder that your running CloudTAK was never touched. It also recognises a full disk, a Docker Hub rate limit, and failed package or npm steps.
+- **Install GStreamer works on a hardened box** (GitHub #67). On a box where the console runs unprivileged behind the privilege broker, the MediaMTX editor's dependency installer was being refused in three separate places and then falling back to a `sudo` that cannot exist there — leaving GStreamer uninstallable, KLV metadata silently dropped from RTSP pushes, and a steady trickle of authentication failures in the system journal. The installer now speaks to the broker correctly. **No security policy was relaxed to do this** — the broker's allow-list is unchanged.
+
+**Upgrading.** Update from the console as usual. If a CloudTAK update failed for you previously, re-run it after this release; reinstall the Dispatcher plugin first if it was installed before today.
+
+### v10.1.64-alpha — 2026-09-11 — Guard Dog stops crying wolf
+
+**Headline: three health checks that raised alarms about healthy systems — or stayed quiet about a broken one — now tell the truth.** Release: https://github.com/takwerx/infra-TAK/releases/tag/v10.1.64-alpha
+
+**Why it matters.** A monitor that cries wolf is worse than no monitor: people learn to ignore it, and the next alert is the real one. Two of these emailed alarms about systems that were working perfectly. The third did the opposite — it reported success after a repair that had not actually worked.
+
+**What changes.**
+- **Split deployments stop being told their database is down.** If your TAK Server and PostgreSQL run on separate machines, Guard Dog was emailing "PostgreSQL service is not running" — listing "Data loss" among the consequences — about a database that was running fine on the other machine, with a suggested fix you would have run on the wrong host. It now reads where the database actually lives from TAK Server's own configuration, checks it there, names that machine in any alert, and never suggests restarting something that is not on the box you are reading about. The console's TAK Server page had the same blind spot and showed a healthy remote database as "stopped".
+- **Video restreamers and other server-side services are no longer counted as clients "connected to nothing".** That check is about a user's device sitting on no channel and therefore transmitting to nobody. A server-side service that deliberately carries no channel is a different thing, is not a fault, and no longer triggers the alert. A real device on no channel still does.
+- **A repaired identity service is now verified, not assumed.** When Guard Dog restarts the Authentik LDAP outpost, it now confirms the outpost can actually resolve channel membership before declaring success — the same real check that was added at boot time in v10.1.55, which the automatic repair paths never performed. Previously a restart could report "restarted successfully" while clients connected, stayed connected, and transmitted to nobody. If it cannot resolve after the repair, it now says so loudly instead.
+
+### v10.1.63-alpha — 2026-09-10 — Container installs work again, TAK keeps its own Java, and the Simulator reaches everyone
+
+**Headline: a fresh container TAK Server install had stopped working for everyone, on every platform — that is fixed — and TAK Server is now pinned to the Java it actually needs, so an unrelated package install can no longer break client enrollment days later.** Release: https://github.com/takwerx/infra-TAK/releases/tag/v10.1.63-alpha
+
+**Why it matters.** Two of these were silent failures: the kind where everything looks healthy and one specific thing is quietly dead. A container install failed at the image build with an apt error that named a Debian mirror, not TAK. And a TAK Server could run perfectly for days after someone installed an unrelated tool, then come back from a routine reboot unable to enroll a single new client — while the map, existing clients, federation and CloudTAK all kept working normally.
+
+**What changes.**
+- **Container TAK Server installs build again.** The base image TAK Server's database is built from reached end of life, and its package sources moved; the build began failing partway through for every new install, on x86 and ARM alike. infra-TAK now repairs the bundle's package sources before building. Affects 5.7 and 5.8 bundles equally — it was never a TAK version problem.
+- **TAK Server is pinned to Java 17.** TAK reaches into internals that Java 21 removed, so on any other Java version new client enrollments fail with an HTTP 500 while everything else looks fine. Installing an unrelated tool that pulls in a newer Java could hand it over silently, and the breakage only appeared at the next restart — potentially days later. TAK now keeps its own Java regardless of what else is installed, the console shows which Java it is running on, and Guard Dog alerts if it is ever wrong.
+- **The TAK Simulator is available to everyone.** It shipped last release but only appeared for consoles on the dev update channel. It is now on the marketplace for everyone, greyed out with an explanation until CloudTAK is deployed, since the director panel lives inside CloudTAK.
+- **TAK Portal shows the right version in Beta Mode**, and the console now says which channel that version came from instead of showing a bare number that looked out of date.
 
 ### v10.1.62-alpha — 2026-09-09 — TAK Simulator: a scripted traffic engine, a CloudTAK director panel, and sensors that detect
 

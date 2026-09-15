@@ -133,6 +133,7 @@ TAK_BUNDLE_DIR = os.path.join(_NONROOT_HOME, 'tak-docker')
 MODULE_DIR_NAMES = (
     'tak-video-restreamer', 'webodm', 'netbird', 'cesium-tiles',
     'TAK-Portal', 'CloudTAK', 'node-red', 'authentik', 'eud-remote-assist',
+    'opentakserver',
 )
 ROOT_MODULE_DIRS = tuple('/root/%s/' % n for n in MODULE_DIR_NAMES)
 # Allowlist module dirs under EVERY plausible console home (the resolved home AND
